@@ -4,10 +4,10 @@ function test_grpc(path, exp, type)
     val = eval('pm.response.messages.all()[0].data.' + path)
     path = path.replace(".", ": ") + ":"
     msg = "Property [" + path + "] has value: "
- 
+
     compare (msg, val, exp, type)
 }
- 
+
 function compare (msg, val, exp, type)
 {
     if (val == exp && type == "eql")
@@ -32,6 +32,8 @@ function compare (msg, val, exp, type)
     }
     else if (exp == "(RANDOM_XML)" )
     {
+        pm.test(msg + '(RANDOM_XML) [' + val + '] as expected' );
+        
         var parseString = require('xml2js').parseString;
         parseString(val, function (err, result) {
         if (result)
@@ -67,12 +69,12 @@ function compare (msg, val, exp, type)
                     pm.expect(parseInt(val)).to.below(parseInt(exp))
                     break;
                 default:
-                    pm.expect(val).to.eql(exp)
+                    pm.expect(exp).to.eql(val)
             }
         });
-    }   
+    }    
 }
- 
+
 function check(parameter, exp, type)
 {
     switch (parameter)
@@ -90,21 +92,22 @@ function check(parameter, exp, type)
             msg = "UNEXPECTED"
     }
     compare (msg, val, exp, type)
+        
 }
- 
+
 function basictests()
 {
     // content-type
     pm.test('"content-type" = "application/grpc"', function (done) {
         pm.response.to.have.metadata('content-type', 'application/grpc');
     });
- 
+
     pm.test('Status code is 0', function (done) {
         pm.response.to.have.statusCode(0);
     });
- 
+
 }
- 
+
 function setvar(varName, path, space)
 {
     val = eval('pm.response.messages.all()[0].data.' + path)
