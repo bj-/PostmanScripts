@@ -52,6 +52,21 @@ function compare (msg, val, exp, type)
         }
         });
     }
+    else if (type == "datetime")
+    {
+        val = val
+
+        if ( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-2]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{3}Z$/.test(val)))
+        {
+            pm.test(msg + '[' + val + '] and has format as expected [' + exp + ']')
+        }
+        else
+        {
+            pm.test(msg + "(DATETIME FORMAT) ", () => {
+                pm.expect(exp).to.eql(val)
+            })
+        }
+    }
     else if ( exp == "NULL" && val == null)
     {
         pm.test(msg + ' [' + val + '] as expected' );
