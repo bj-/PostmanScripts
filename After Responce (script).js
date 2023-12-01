@@ -1,14 +1,14 @@
 // ============== Functions ===============
-function test_grpc(path, exp, type)
+function test_grpc(path, exp, type, silent)
 {
     val = eval('pm.response.messages.all()[0].data.' + path)
     path = path.replace(".", ": ") + ":"
     msg = "Property [" + path + "] has value: "
 
-    compare (msg, val, exp, type)
+    compare (msg, val, exp, type, silent)
 }
 
-function compare (msg, val, exp, type)
+function compare (msg, val, exp, type, silent)
 {
     if (val == exp && type == "eql")
     {
@@ -16,15 +16,24 @@ function compare (msg, val, exp, type)
         {
             val = val.substr(1,50) + "..."
         }
-        pm.test(msg + '[' + val + '] as expected' );
+        if (silent == null || silent == "")
+        {
+            pm.test(msg + '[' + val + '] as expected' );
+        }
     }
     else if (val < exp && type == "below")
     {
-        pm.test(msg + '[' + val + '] below than [' + exp + '] as expected' );
+        if (silent == null || silent == "")
+        {
+            pm.test(msg + '[' + val + '] below than [' + exp + '] as expected' );
+        }
     }
     else if (val > exp && type == "above")
     {
-        pm.test(msg + '[' + val + '] above than [' + exp + '] as expected' );
+        if (silent == null || silent == "")
+        {
+            pm.test(msg + '[' + val + '] above than [' + exp + '] as expected' );
+        }
     }
     else if (exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)))
     {
@@ -90,7 +99,7 @@ function compare (msg, val, exp, type)
     }    
 }
 
-function check(parameter, exp, type)
+function check(parameter, exp, type, silent)
 {
     switch (parameter)
     {
@@ -106,7 +115,7 @@ function check(parameter, exp, type)
             val = "UNEXPECTED"
             msg = "UNEXPECTED"
     }
-    compare (msg, val, exp, type)
+    compare (msg, val, exp, type, silent)
         
 }
 
