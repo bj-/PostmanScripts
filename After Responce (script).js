@@ -16,33 +16,24 @@ function compare (msg, val, exp, type, silent)
         {
             val = val.substr(1,50) + "..."
         }
-        if (silent == null || silent == "")
-        {
-            pm.test(msg + '[' + val + '] as expected' );
-        }
+        show_pass(msg + '[' + val + '] as expected', silent)
     }
     else if (val < exp && type == "below")
     {
-        if (silent == null || silent == "")
-        {
-            pm.test(msg + '[' + val + '] below than [' + exp + '] as expected' );
-        }
+        show_pass(msg + '[' + val + '] below than [' + exp + '] as expected' , silent)
     }
     else if (val > exp && type == "above")
     {
-        if (silent == null || silent == "")
-        {
-            pm.test(msg + '[' + val + '] above than [' + exp + '] as expected' );
-        }
+        show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
     }
     else if (exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)))
     {
-        pm.test(msg + '(random guid) [' + val + '] as expected' );
+        show_pass(msg + '(random guid) [' + val + '] as expected', silent)
     }
     else if (exp == "(RANDOM_XML)" )
     {
-        pm.test(msg + '(RANDOM_XML) [' + val + '] as expected' );
-        
+        show_pass(msg + '(RANDOM_XML) [' + val + '] as expected', silent)
+
         var parseString = require('xml2js').parseString;
         parseString(val, function (err, result) {
         if (result)
@@ -51,7 +42,7 @@ function compare (msg, val, exp, type, silent)
             {
                 val = val.substr(1,50) + "..."
             }
-            pm.test(msg + '(random XML) [' + val + '] as expected' );
+            show_pass(msg + '(random XML) [' + val + '] as expected', silent)
         }
         else
         {
@@ -63,11 +54,9 @@ function compare (msg, val, exp, type, silent)
     }
     else if (type == "datetime")
     {
-        val = val
-
         if ( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-2]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{3}Z$/.test(val)))
         {
-            pm.test(msg + '[' + val + '] and has format as expected [' + exp + ']')
+            show_pass(msg + '[' + val + '] and has format as expected [' + exp + ']', silent)
         }
         else
         {
@@ -78,11 +67,11 @@ function compare (msg, val, exp, type, silent)
     }
     else if ( exp == "NULL" && val == null)
     {
-        pm.test(msg + ' [' + val + '] as expected' );
+        show_pass(msg + ' [' + val + '] as expected', silent)
     }
     else
     {
-        console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
+        //console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
         pm.test(msg, () => {
             switch (type)
             {
@@ -116,7 +105,14 @@ function check(parameter, exp, type, silent)
             msg = "UNEXPECTED"
     }
     compare (msg, val, exp, type, silent)
-        
+}
+
+function show_pass(msg, silent)
+{
+    if (silent == null || silent == "")
+    {
+        pm.test(msg);
+    }
 }
 
 function basictests()
