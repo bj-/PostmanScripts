@@ -32,8 +32,6 @@ function compare (msg, val, exp, type, silent)
     }
     else if (exp == "(RANDOM_XML)" )
     {
-        show_pass(msg + '(RANDOM_XML) [' + val + '] as expected', silent)
-
         var parseString = require('xml2js').parseString;
         parseString(val, function (err, result) {
         if (result)
