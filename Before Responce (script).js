@@ -19,3 +19,12 @@ function convert(dest, var_space, src_var, target_var)
             pm.collectionVariables.set(target_var, encoded);
     }
 }
+
+function randomString(length=1) {
+    // length = str length
+    let randomString = "";
+    for (let i = 0; i < length; i++){
+        randomString += pm.variables.replaceIn("{{$randomAlphaNumeric}}");
+    }
+    return randomString;
+}
