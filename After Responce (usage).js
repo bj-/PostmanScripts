@@ -6,6 +6,8 @@ test_grpc("user_task_id", "NULL", "NULL")
 test_grpc("user_task_id.value", "(RANDOM_GUID)", "guid")
 test_grpc("created_date_time.value", "YYYY-MM-DDThh:mm:ss.tttZ", "datetime")
 test_grpc("assignee.value", "a2c3ac37-6648-4cea-81b8-63d079d4481e", "eql")
+test_grpc("sequences.name", "/^Test #[0-9]{4}$/", "regex")
+test_grpc("sequences", ["propertyName","value"], "array")
  
 // Check Parameter
 // Parameter [statusCode|responseTime], Expected value, Comparison type [eql|above|below]
