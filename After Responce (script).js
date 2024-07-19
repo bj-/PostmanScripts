@@ -1,21 +1,39 @@
 // ============== Functions ===============
-function exist(path, check_var)
+function getContentType()
 {
-    if (check_var === undefined)
+    var contentType = (pm.response.headers.has("Content-Type")) ? pm.response.headers.get("Content-Type") : false;
+    //console.log("Responce's Content-Type is [" + contentType + "]");
+    if ( (/^application\/json.*$/.test(contentType)) )
     {
-        pm.test("Variable [" + path + "] is undefined", () => {
-        response = pm.response.messages.all()[0].data;
-        pm.expect(response).to.have.property(path)
-        })
-        return false
+        contentType = "json";
     }
-    return true
+    else if ( (/^application\/grpc.*$/.test(contentType)) )
+    {
+        contentType = "grpc";
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
+    return contentType;
 }
- 
-function test_grpc(path, exp, type, silent)
+function test(path, exp, type, silent)
 {
-    val = eval('pm.response.messages.all()[0].data.' + path)
-     
+    var contentType = getContentType();
+    if ( contentType == "json" )
+    {
+        val = eval('pm.response.json().' + path);
+    }
+    else if ( contentType == "json" )
+    {
+        val = eval('pm.response.messages.all()[0].data.' + path);
+        //console.log("ssssssssssss_")
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
+
     if(exist(path, val))
     {
         path = path.replace(".", ": ") + ":"
@@ -28,10 +46,24 @@ function test_grpc(path, exp, type, silent)
             msg = "Property [" + path + "] has value: "
         }
         compare (msg, val, exp, type, silent)
-        
+		
     }
+
 }
-  
+
+function exist(path, check_var)
+{
+    if (check_var === undefined)
+    {
+        pm.test("Variable [" + path + "] is undefined", () => {
+        response = pm.response.messages.all()[0].data;
+        pm.expect(response).to.have.property(path)
+        })
+        return false
+    }
+    return true
+}
+
 function compare (msg, val, exp, type, silent)
 {
     if (val == exp && type == "eql")
@@ -50,6 +82,14 @@ function compare (msg, val, exp, type, silent)
     {
         show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
     }
+    else if (type == "below_count_array" && val.length < exp)
+    {
+        show_pass(msg + ' below than [' + exp + '] as expected', silent)
+    }
+    else if (type == "above_count_array" && val.length > exp)
+    {
+        show_pass(msg + ' above than [' + exp + '] as expected', silent)
+    }															 
     else if (type == "regex" && eval(exp + '.test(val)'))
     {
         show_pass(msg + '[' + val + '] by regex [' + exp + '] as expected', silent)
@@ -138,6 +178,12 @@ function compare (msg, val, exp, type, silent)
                 case "below":
                     pm.expect(parseInt(val)).to.below(parseInt(exp))
                     break;
+                case "above_count_array":
+                    pm.expect(parseInt(val.length)).to.above(parseInt(exp))
+                    break;
+                case "below_count_array":
+                    pm.expect(parseInt(val.length)).to.below(parseInt(exp))
+                    break;										 
                 default:
                     pm.expect(exp).to.eql(val)
             }
@@ -174,15 +220,28 @@ function show_pass(msg, silent)
   
 function basictests()
 {
-    // content-type
-    pm.test('"content-type" = "application/grpc"', function (done) {
-        pm.response.to.have.metadata('content-type', 'application/grpc');
-    });
-  
-    pm.test('Status code is 0', function (done) {
-        pm.response.to.have.statusCode(0);
-    });
-  
+    var contentType = getContentType();
+    if ( contentType == "json" )
+    {
+        // Status Code
+        pm.test('Status code is 200', function (done) {
+            pm.response.to.have.statusCode(200);
+        });
+    }
+    else if ( contentType == "grpc" )
+    {
+        // Status Code
+        pm.test('Status code is 0', function (done) {
+            pm.response.to.have.statusCode(0);
+        });
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "] for BasicTest()")
+        pm.test('Unsupported Content-Type [' + contentType + '] for BasicTest() ', function (done) {
+            pm.expect('JSON or gRPC').to.eql(contentType, "sds");
+        });
+    }
 }
   
 function setvar(varName, path, space)
@@ -206,4 +265,10 @@ function randomString(length=1) {
         randomString += pm.variables.replaceIn("{{$randomAlphaNumeric}}");
     }
     return randomString;
+}
+
+// Absolette functions
+function test_grpc(path, exp, type, silent)
+{
+    test(path, exp, type, silent);
 }
