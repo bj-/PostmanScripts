@@ -2,8 +2,8 @@ utils = {
   basictests: function() {
     basictests();
   },
-  test_graphql: function(path, exp, type, silent) {
-    test_graphql (path, exp, type, silent);
+  test: function(path, exp, type, silent) {
+    test(path, exp, type, silent);
   },
   check: function(parameter, exp, type, silent) {
     check(parameter, exp, type, silent);

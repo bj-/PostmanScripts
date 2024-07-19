@@ -27,13 +27,11 @@ function test(path, exp, type, silent)
     else if ( contentType == "json" )
     {
         val = eval('pm.response.messages.all()[0].data.' + path);
-        //console.log("ssssssssssss_")
     }
     else
     {
         console.log("Unsupported Content-Type [" + contentType + "]")
     }
-
     if(exist(path, val))
     {
         path = path.replace(".", ": ") + ":"
@@ -46,9 +44,7 @@ function test(path, exp, type, silent)
             msg = "Property [" + path + "] has value: "
         }
         compare (msg, val, exp, type, silent)
-		
     }
-
 }
 
 function exist(path, check_var)
@@ -66,7 +62,9 @@ function exist(path, check_var)
 
 function compare (msg, val, exp, type, silent)
 {
-    if (val == exp && type == "eql")
+    //console.log("Finction Compare start")
+    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
+    if ( val == exp && type == "eql" )
     {
         if (val.length > 50) // if val so long
         {
@@ -74,56 +72,56 @@ function compare (msg, val, exp, type, silent)
         }
         show_pass(msg + '[' + val + '] as expected', silent)
     }
-    else if (val < exp && type == "below")
+    else if (val < exp && type == "below" )
     {
         show_pass(msg + '[' + val + '] below than [' + exp + '] as expected' , silent)
     }
-    else if (val > exp && type == "above")
+    else if ( val > exp && type == "above" )
     {
         show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
     }
-    else if (type == "below_count_array" && val.length < exp)
+    else if ( type == "below_count_array" && val.length < exp) 
     {
         show_pass(msg + ' below than [' + exp + '] as expected', silent)
     }
-    else if (type == "above_count_array" && val.length > exp)
+    else if (type == "above_count_array" && val.length > exp )
     {
         show_pass(msg + ' above than [' + exp + '] as expected', silent)
     }															 
-    else if (type == "regex" && eval(exp + '.test(val)'))
+    else if ( type == "regex" && eval(exp + '.test(val)') )
     {
         show_pass(msg + '[' + val + '] by regex [' + exp + '] as expected', silent)
     }
-    else if (type == "array")
+    else if ( type == "array" )
     {  
         valueFound = false
         val.forEach(function(elem)
         {
             expResult = eval('elem["' + exp[0].replaceAll(".", '"]["') + '"]')
-            if (expResult == exp[1])
+            if ( expResult == exp[1] )
             {
                 show_pass(msg + ' has value: [' + expResult + '] in property [' + exp[0] + '] as expected', silent)
                 valueFound = true
             }
         });
-        if (!valueFound)
+        if ( !valueFound )
             {
                 pm.test(msg + ' has not value in elem [' + exp[0] + ']', () => {
                 pm.expect(exp[1]).to.be.oneOf(val);
                 })
             }
     }
-    else if (exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)))
+    else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
     {
         show_pass(msg + '(random guid) [' + val + '] as expected', silent)
     }
-    else if (exp == "(RANDOM_XML)" )
+    else if ( exp == "(RANDOM_XML)" )
     {
         var parseString = require('xml2js').parseString;
         parseString(val, function (err, result) {
         if (result)
         {
-            if (val.length > 50) // if val so long
+            if ( val.length > 50 ) // if val so long
             {
                 val = val.substr(1,50) + "..."
             }
@@ -137,7 +135,7 @@ function compare (msg, val, exp, type, silent)
         }
         });
     }
-    else if (exp == "(RANDOM_PROPERTY)")
+    else if ( exp == "(RANDOM_PROPERTY)" )
     {
         if (val.length > 50) // if val so long
         {
@@ -145,11 +143,11 @@ function compare (msg, val, exp, type, silent)
         }
         show_pass(msg + ' [' + val + '] as expected', silent)
     }
-    else if (exp == "(RANDOM_CERT)" && (/^[0-9a-fA-F]{40}$/.test(val)))
+    else if ( exp == "(RANDOM_CERT)" && (/^[0-9a-fA-F]{40}$/.test(val)) )
     {
         show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
     }
-    else if (type == "datetime")
+    else if ( type == "datetime" )
     {
         if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
         {
@@ -212,7 +210,7 @@ function check(parameter, exp, type, silent)
   
 function show_pass(msg, silent)
 {
-    if (silent == null || silent == "")
+    if ( silent == null || silent == "" )
     {
         pm.test(msg);
     }
@@ -271,4 +269,12 @@ function randomString(length=1) {
 function test_grpc(path, exp, type, silent)
 {
     test(path, exp, type, silent);
+}
+
+function header(name, exp, type, silent)
+{
+    val = pm.response.headers.get(name)
+    msg = "Header property [" + name + "] has value: "
+    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
+    compare (msg, val, exp, type, silent)
 }
