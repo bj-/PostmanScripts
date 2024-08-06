@@ -111,13 +111,17 @@ function compare (msg, val, exp, type, silent)
         show_pass("Size of array " + '[' + val + '] is [' + exp.length + '] as expected', silent)
     }
     */
-    else if ( (type == "below_count_array" || type == "array_count_below") && val.length < exp) 
+    else if ( (type == "below_count_array" || type == "array_count_below") && val.length < parseInt(exp)) 
     {
         show_pass(msg + ' below than [' + exp + '] as expected', silent)
     }
-    else if ( (type == "above_count_array" || type == "array_count_above") && val.length > exp )
+    else if ( (type == "above_count_array" || type == "array_count_above") && val.length > parseInt(exp) )
     {
         show_pass(msg + ' above than [' + exp + '] as expected', silent)
+    }															 
+    else if ( (type == "array_count") && val.length == parseInt(exp) )
+    {
+        show_pass(msg + ' count is [' + exp + '] as expected', silent)
     }															 
     else if ( type == "array" )
     {  
@@ -217,6 +221,10 @@ function compare (msg, val, exp, type, silent)
                 case "below_count_array":
                     pm.expect(parseInt(val.length)).to.below(parseInt(exp))
                     break;										 
+                case "array_count":
+                    console.log(val.length)
+                    pm.expect(parseInt(val.length)).to.equal(parseInt(exp))
+                    break;
                 case "array_count_above":
                     pm.expect(parseInt(val.length)).to.above(parseInt(exp))
                     break;
