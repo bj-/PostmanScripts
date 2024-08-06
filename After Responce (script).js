@@ -19,31 +19,52 @@ function getContentType()
 }
 function test(path, exp, type, silent)
 {
+    var pathF = path.replace(".", ": ") + ":"
+    if (type.toUpperCase().substring(0,5) == "ARRAY")
+    {
+        msg = "Array [" + pathF + "]"
+    }
+    else 
+    {
+        msg = "Property [" + pathF + "] has value: "
+    }
     var contentType = getContentType();
     if ( contentType == "json" )
     {
-        val = eval('pm.response.json().' + path);
+        // If first node is array - must select path "pm.response.json()" without dot at end
+        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
+        // Try to read key if it exist
+        var keyExist = true;
+        try
+        {
+            val = eval(startPath + path);
+    	}
+    	catch(e)
+    	{
+            //console.error(e);
+            //console.error(e.message);
+            pm.test("Variable [" + path + "] is undefined", () => {
+                pm.expect(eval(startPath + path)).to.be.exist;
+	        })
+            keyExist = false;
+        }
+        if ( keyExist )
+        {
+     	    val = eval(startPath + path);
+            compare (msg, val, exp, type, silent)
+        }
     }
-    else if ( contentType == "json" )
+    else if ( contentType == "grpc" )
     {
         val = eval('pm.response.messages.all()[0].data.' + path);
+        if(exist(path, val))
+        {
+            compare (msg, val, exp, type, silent)
+        }
     }
     else
     {
         console.log("Unsupported Content-Type [" + contentType + "]")
-    }
-    if(exist(path, val))
-    {
-        path = path.replace(".", ": ") + ":"
-        if (type.toUpperCase() == "ARRAY")
-        {
-            msg = "Array [" + path + "]"
-        }
-        else 
-        {
-            msg = "Property [" + path + "] has value: "
-        }
-        compare (msg, val, exp, type, silent)
     }
 }
 
@@ -80,18 +101,24 @@ function compare (msg, val, exp, type, silent)
     {
         show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
     }
-    else if ( type == "below_count_array" && val.length < exp) 
-    {
-        show_pass(msg + ' below than [' + exp + '] as expected', silent)
-    }
-    else if (type == "above_count_array" && val.length > exp )
-    {
-        show_pass(msg + ' above than [' + exp + '] as expected', silent)
-    }															 
     else if ( type == "regex" && eval(exp + '.test(val)') )
     {
         show_pass(msg + '[' + val + '] by regex [' + exp + '] as expected', silent)
     }
+    /*
+    else if ( type == "ARRAY_SIZE_EQL" && val.length == exp )
+    {
+        show_pass("Size of array " + '[' + val + '] is [' + exp.length + '] as expected', silent)
+    }
+    */
+    else if ( (type == "below_count_array" || type == "array_count_below") && val.length < exp) 
+    {
+        show_pass(msg + ' below than [' + exp + '] as expected', silent)
+    }
+    else if ( (type == "above_count_array" || type == "array_count_above") && val.length > exp )
+    {
+        show_pass(msg + ' above than [' + exp + '] as expected', silent)
+    }															 
     else if ( type == "array" )
     {  
         valueFound = false
@@ -164,6 +191,14 @@ function compare (msg, val, exp, type, silent)
     {
         show_pass(msg + ' [' + val + '] as expected', silent)
     }
+    else if ( exp == "EMPTY" && Object.keys(val).length == 0)
+    {
+        show_pass(msg + ' [' + 'HAS NO KEYS' + '] as expected', silent)
+    }
+    else if ( exp == "KEY_EXIST" && ( val != undefined || val == null ) )
+    {
+        show_pass(msg + ' [' + val + '] it is "Not Empty or Does Exist" as expected', silent)
+    }
     else
     {
         //console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
@@ -180,6 +215,12 @@ function compare (msg, val, exp, type, silent)
                     pm.expect(parseInt(val.length)).to.above(parseInt(exp))
                     break;
                 case "below_count_array":
+                    pm.expect(parseInt(val.length)).to.below(parseInt(exp))
+                    break;										 
+                case "array_count_above":
+                    pm.expect(parseInt(val.length)).to.above(parseInt(exp))
+                    break;
+                case "array_count_below":
                     pm.expect(parseInt(val.length)).to.below(parseInt(exp))
                     break;										 
                 default:

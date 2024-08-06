@@ -8,6 +8,12 @@ test("created_date_time.value", "YYYY-MM-DDThh:mm:ss.tttZ", "datetime")
 test("assignee.value", "a2c3ac37-6648-4cea-81b8-63d079d4481e", "eql")
 test("sequences.name", "/^Test #[0-9]{4}$/", "regex")
 test("sequences", ["propertyName","value"], "array")
+test("someKey", "EMPTY", "EMPTY") // No keys in this key like to "someKey: {},"
+test("additionalFields.create_dt", "KEY_EXIST", "KEY_EXIST") // Key exist and has any value, or null
+
+// using if code is Collection's script
+utils.test("info.result", "", "eql")
+
 header("Content-Length", 1000, "below")
  
 // Check Parameter
