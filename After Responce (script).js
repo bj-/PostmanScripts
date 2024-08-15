@@ -1,22 +1,5 @@
 // ============== Functions ===============
-function getContentType()
-{
-    var contentType = (pm.response.headers.has("Content-Type")) ? pm.response.headers.get("Content-Type") : false;
-    //console.log("Responce's Content-Type is [" + contentType + "]");
-    if ( (/^application\/json.*$/.test(contentType)) )
-    {
-        contentType = "json";
-    }
-    else if ( (/^application\/grpc.*$/.test(contentType)) )
-    {
-        contentType = "grpc";
-    }
-    else
-    {
-        console.log("Unsupported Content-Type [" + contentType + "]")
-    }
-    return contentType;
-}
+// Public
 function test(path, exp, type, silent)
 {
     var pathF = path.replace(".", ": ") + ":"
@@ -68,24 +51,13 @@ function test(path, exp, type, silent)
     }
 }
 
-function exist(path, check_var)
-{
-    if (check_var === undefined)
-    {
-        pm.test("Variable [" + path + "] is undefined", () => {
-        response = pm.response.messages.all()[0].data;
-        pm.expect(response).to.have.property(path)
-        })
-        return false
-    }
-    return true
-}
-
 function compare (msg, val, exp, type, silent)
 {
     //console.log("Finction Compare start")
     //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
-    if ( val == exp && type == "eql" )
+    type = type.toUpperCase();
+
+    if ( val == exp && type == "eql".toUpperCase() )
     {
         if (val.length > 50) // if val so long
         {
@@ -93,15 +65,15 @@ function compare (msg, val, exp, type, silent)
         }
         show_pass(msg + '[' + val + '] as expected', silent)
     }
-    else if (val < exp && type == "below" )
+    else if (val < exp && type == "below".toUpperCase() )
     {
         show_pass(msg + '[' + val + '] below than [' + exp + '] as expected' , silent)
     }
-    else if ( val > exp && type == "above" )
+    else if ( val > exp && type == "above".toUpperCase() )
     {
         show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
     }
-    else if ( type == "regex" && eval(exp + '.test(val)') )
+    else if ( type == "regex".toUpperCase() && eval(exp + '.test(val)') )
     {
         show_pass(msg + '[' + val + '] by regex [' + exp + '] as expected', silent)
     }
@@ -111,19 +83,19 @@ function compare (msg, val, exp, type, silent)
         show_pass("Size of array " + '[' + val + '] is [' + exp.length + '] as expected', silent)
     }
     */
-    else if ( (type == "below_count_array" || type == "array_count_below") && val.length < parseInt(exp)) 
+    else if ( (type == "below_count_array".toUpperCase() || type == "array_count_below".toUpperCase()) && val.length < parseInt(exp)) 
     {
         show_pass(msg + ' below than [' + exp + '] as expected', silent)
     }
-    else if ( (type == "above_count_array" || type == "array_count_above") && val.length > parseInt(exp) )
+    else if ( (type == "above_count_array".toUpperCase() || type == "array_count_above".toUpperCase()) && val.length > parseInt(exp) )
     {
         show_pass(msg + ' above than [' + exp + '] as expected', silent)
     }															 
-    else if ( (type == "array_count") && val.length == parseInt(exp) )
+    else if ( (type == "array_count".toUpperCase()) && val.length == parseInt(exp) )
     {
         show_pass(msg + ' count is [' + exp + '] as expected', silent)
     }															 
-    else if ( type == "array" )
+    else if ( type == "array".toUpperCase() )
     {  
         valueFound = false
         val.forEach(function(elem)
@@ -141,6 +113,39 @@ function compare (msg, val, exp, type, silent)
                 pm.expect(exp[1]).to.be.oneOf(val);
                 })
             }
+    }
+    else if ( type == "array_compare_keysInExp".toUpperCase() || type == "array_compare_expInKeys".toUpperCase() )
+    {
+        // Compare arrays: responce keys in array and Expect list
+        if ( type == "array_compare_keysInExp".toUpperCase() )
+        {
+            // Keys in responce array is exist in exp's array
+            var arrayVal = getKeysfromJSONarray(val);
+            var arrayExp = exp;
+            var msgAdd = "exp list"
+
+        }
+        else if (type == "array_compare_expInKeys".toUpperCase())
+        {
+            // Items (keys list) in exp's array is exist in responce array
+            var arrayVal = exp;
+            var arrayExp = getKeysfromJSONarray(val);
+            var msgAdd = "responce"
+        }
+
+        arrayVal.forEach((element) => {
+            if ( arrayExp.includes(element) )
+            {
+                show_pass(msg +  " has key [" + element + "] as expected", silent);
+            }
+            else
+            {
+                pm.test(msg + " key [" + element + "] does not exist in " + msgAdd, () => {
+                    pm.expect(element).to.include(arrayExp)
+                });
+
+            }
+        })
     }
     else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
     {
@@ -178,7 +183,7 @@ function compare (msg, val, exp, type, silent)
     {
         show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
     }
-    else if ( type == "datetime" )
+    else if ( type == "datetime".toUpperCase() )
     {
         if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
         {
@@ -209,26 +214,26 @@ function compare (msg, val, exp, type, silent)
         pm.test(msg, () => {
             switch (type)
             {
-                case "above":
+                case "above".toUpperCase():
                     pm.expect(parseInt(val)).to.above(parseInt(exp))
                     break;
-                case "below":
+                case "below".toUpperCase():
                     pm.expect(parseInt(val)).to.below(parseInt(exp))
                     break;
-                case "above_count_array":
+                case "above_count_array".toUpperCase():
                     pm.expect(parseInt(val.length)).to.above(parseInt(exp))
                     break;
-                case "below_count_array":
+                case "below_count_array".toUpperCase():
                     pm.expect(parseInt(val.length)).to.below(parseInt(exp))
                     break;										 
-                case "array_count":
+                case "array_count".toUpperCase():
                     console.log(val.length)
                     pm.expect(parseInt(val.length)).to.equal(parseInt(exp))
                     break;
-                case "array_count_above":
+                case "array_count_above".toUpperCase():
                     pm.expect(parseInt(val.length)).to.above(parseInt(exp))
                     break;
-                case "array_count_below":
+                case "array_count_below".toUpperCase():
                     pm.expect(parseInt(val.length)).to.below(parseInt(exp))
                     break;										 
                 default:
@@ -243,26 +248,22 @@ function check(parameter, exp, type, silent)
     switch (parameter)
     {
         case "statusCode":
-            val = pm.response.statusCode
+            val = (pm.response.statusCode === undefined ) ? pm.response.code : pm.response.statusCode;
             msg = 'Status Code is '
             break;
         case "responseTime":
             val = pm.response.responseTime
             msg = 'Response Time is '
             break;
+        case "contentLength":
+            val = pm.response.headers.get("Content-Length")
+            msg = 'Content Length is '
+            break;
         default:
             val = "UNEXPECTED"
             msg = "UNEXPECTED"
     }
     compare (msg, val, exp, type, silent)
-}
-  
-function show_pass(msg, silent)
-{
-    if ( silent == null || silent == "" )
-    {
-        pm.test(msg);
-    }
 }
   
 function basictests()
@@ -304,7 +305,7 @@ function setvar(varName, path, space)
             break;
     }
 }
-  
+
 function randomString(length=1) {
     // length = str length
     let randomString = "";
@@ -314,7 +315,61 @@ function randomString(length=1) {
     return randomString;
 }
 
-// Absolette functions
+// Internal functions
+function getContentType()
+{
+    var contentType = (pm.response.headers.has("Content-Type")) ? pm.response.headers.get("Content-Type") : false;
+    //console.log("Responce's Content-Type is [" + contentType + "]");
+    if ( (/^application\/json.*$/.test(contentType)) )
+    {
+        contentType = "json";
+    }
+    else if ( (/^application\/grpc.*$/.test(contentType)) )
+    {
+        contentType = "grpc";
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
+    return contentType;
+}
+
+function exist(path, check_var)
+{
+    if (check_var === undefined)
+    {
+        pm.test("Variable [" + path + "] is undefined", () => {
+        response = pm.response.messages.all()[0].data;
+        pm.expect(response).to.have.property(path)
+        })
+        return false
+    }
+    return true
+}
+
+function show_pass(msg, silent)
+{
+    if ( silent == null || silent == "" )
+    {
+        pm.test(msg);
+    }
+}
+
+function getKeysfromJSONarray(arr)
+{
+    // Transform JSON array from ["key1": "val1, "key2": "val2"] â ["key1", "key2"] 
+    var ret = [];
+    val.forEach((element) => {
+        var keys = Object.keys(element);
+        var key = keys[0];
+        //console.log(key);
+        ret.push(key)
+    })
+    return ret;
+}
+
+// Absolette functions. For backward compatibility.
 function test_grpc(path, exp, type, silent)
 {
     test(path, exp, type, silent);
