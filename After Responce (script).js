@@ -306,6 +306,23 @@ function setvar(varName, path, space)
     }
 }
 
+function getvar(varName, space="collection")
+{
+    space = space.toUpperCase();
+    ret = "";
+    if ( space == "COLLECTION" )
+    {
+        ret = pm.collectionVariables.get(varName);
+    }
+    /*
+    else if ( space == "ENVIRONMENT" )
+    {
+
+    }
+    */
+    return ret;
+}
+
 function randomString(length=1) {
     // length = str length
     let randomString = "";

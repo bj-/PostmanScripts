@@ -11,6 +11,9 @@ utils = {
   setvar: function(varName, path, space) {
     setvar(varName, path, space);
   },
+  getvar: function(varName, space="collection") {
+    getvar(varName, space);
+  },
   randomString: function(length=1) {
     randomString(length)
   }
