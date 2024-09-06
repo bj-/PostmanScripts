@@ -294,11 +294,42 @@ function basictests()
   
 function setvar(varName, path, space)
 {
-    val = eval('pm.response.messages.all()[0].data.' + path)
+    var contentType = getContentType();
+    if ( contentType == "json" )
+    {
+        // If first node is array - must select path "pm.response.json()" without dot at end
+        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
+        // Try to read key if it exist
+        var keyExist = true;
+        try
+        {
+            val = eval(startPath + path);
+    	}
+    	catch(e)
+    	{
+            pm.test("Variable [" + path + "] is undefined", () => {
+                pm.expect(eval(startPath + path)).to.be.exist;
+	        })
+            keyExist = false;
+        }
+        if ( keyExist )
+        {
+     	    val = eval(startPath + path);
+        }
+    }
+    else if ( contentType == "grpc" )
+    {
+        val = eval('pm.response.messages.all()[0].data.' + path)
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
     switch (space)
     {
         case 'collection':
             pm.collectionVariables.set(varName, val);
+            //console.log("var " + varName + "; val " + val)
             break;
         case 'env':
             pm.environment.set(varName, val);
@@ -308,18 +339,15 @@ function setvar(varName, path, space)
 
 function getvar(varName, space="collection")
 {
-    space = space.toUpperCase();
     ret = "";
-    if ( space == "COLLECTION" )
+    switch (space.toUpperCase())
     {
-        ret = pm.collectionVariables.get(varName);
+        case "COLLECTION":
+            ret = pm.collectionVariables.get(varName);
+            break;
+        default:
+            ret = pm.collectionVariables.get(varName);
     }
-    /*
-    else if ( space == "ENVIRONMENT" )
-    {
-
-    }
-    */
     return ret;
 }
 

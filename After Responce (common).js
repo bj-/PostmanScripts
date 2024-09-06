@@ -12,9 +12,9 @@ utils = {
     setvar(varName, path, space);
   },
   getvar: function(varName, space="collection") {
-    getvar(varName, space);
+    return getvar(varName, space);
   },
   randomString: function(length=1) {
-    randomString(length)
-  }
+    return randomString(length)
+  },
 };
