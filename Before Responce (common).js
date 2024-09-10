@@ -1,17 +1,11 @@
 utils = {
-  basictests: function() {
-    basictests();
+  convert: function(dest, var_space, src_var, target_var) {
+    convert(dest, var_space, src_var, target_var);
   },
-  test: function(path, exp, type, silent) {
-    test(path, exp, type, silent);
-  },
-  check: function(parameter, exp, type, silent) {
-    check(parameter, exp, type, silent);
-  },
-  setvar: function(varName, path, space) {
-    setvar(varName, path, space);
+  randomVal: function(type, min=null, max=null, length=1) {
+    return randomVal(type, min, max, length);
   },
   randomString: function(length=1) {
-    randomString(length)
+    return randomString(length)
   }
 };
