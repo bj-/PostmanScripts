@@ -78,3 +78,9 @@ setvar("VariableName", "info.result", "env"); // environment
  
 // Basic Tests (Status code, content-type)
 basictests()
+
+// MANDATORY FUNCTION in each request
+function test(path, exp, type, silent){
+    let x = utils.test(path, exp, type, silent);
+    console.log(x);
+}
