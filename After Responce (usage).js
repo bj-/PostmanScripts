@@ -58,32 +58,42 @@ header("Content-Length", 1000, "below")
 
 // Check Parameters
 // Parameter [statusCode|responseTime], Expected value, Comparison type [eql|above|below]
-check("statusCode", 0, "eql")
-//check("statusCode", 1, "eql")
-check("responseTime", 1000, "below")
-//check("responseTime", 1, "below")
-check("responseTime", 1, "above")
+test("check", "statusCode", 2005, "eql", "silent")
+test("check", "responseTime", 1000, "below", "silent")
+test("check", "responseTime", 1, "above", "silent")
  
 
-// Set Variables
+// Set Variables --- NOT WORK
 // Variable Name, Path in responce, Space [collection|env]
-setvar("VariableName", "info.result", "collection"); // collectionVariables
-setvar("VariableName", "info.result", "env"); // environment
+//setvar("VariableName", "info.result", "collection"); // collectionVariables
+//setvar("VariableName", "info.result", "env"); // environment
 
  
-// Get Variables
+// Get Variables --- NOT WORK
 // val = pm.collectionVariables.get("VariableName")
 // val = pm.environment.get("VariableName")
 
  
-// Basic Tests (Status code, content-type)
-basictests()
+// Basic Tests (Status code, content-type) -- NOT WORK
+// basictests()
 
 // MANDATORY FUNCTION in each request
-function test(path, exp, type, silent = false) {
-    let r = utils.test(path, exp, type, silent);
+
+
+// MANDATORY FUNCTION in each request
+function test(testtype, path, exp, type, silent = false) {
+    let r;
+    switch (testtype.toUpperCase()) {
+        case "CHECK":
+            r = utils.check(path, exp, type, silent);
+            break;
+        case "KEY":
+            r = utils.test(path, exp, type, silent);
+            break;
+    }
+    
     //console.log(r);
-    if (!r.Silent || r.Assert) {
+    if (r && (!r.Silent || r.Assert)) {
         pm.test(r.Result, () => r.Assert && pm.expect.fail(r.Assert));
         r.Msg?.forEach((element) => console.log(element));
     }

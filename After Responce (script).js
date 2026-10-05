@@ -1,12 +1,12 @@
 utils = {
-  basictests: function() {
-    basictests();
+  statusCode: function() {
+    return statusCode();
   },
   test: function(path, exp, type, silent) {
    return test(path, exp, type, silent);
   },
   check: function(parameter, exp, type, silent) {
-    check(parameter, exp, type, silent);
+    return check(parameter, exp, type, silent);
   },
   setvar: function(varName, path, space) {
     setvar(varName, path, space);
@@ -332,53 +332,72 @@ function compare (msg, val, exp, type, silent = false)
   
 function check(parameter, exp, type, silent)
 {
+    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
+    let msg = ''
+
     switch (parameter)
     {
         case "statusCode":
             val = (pm.response.statusCode === undefined ) ? pm.response.code : pm.response.statusCode;
-            msg = 'Status Code is '
+            tResult.Result = "Status code is ";
+            //tResult.Msg.push("parameter ["+parameter+"], exp ["+exp+"], type ["+type+"], silent ["+silent+"]");
             break;
         case "responseTime":
             val = pm.response.responseTime
-            msg = 'Response Time is '
+            //msg = 'Response Time is '
+            tResult.Result = "Response Time is";
             break;
         case "contentLength":
-            val = pm.response.headers.get("Content-Length")
-            msg = 'Content Length is '
+            val = pm.response.headers.get("Content-Length");
+            tResult.Result = "Content Length is ";
+            //msg = 'Content Length is '
             break;
         default:
-            val = "UNEXPECTED"
-            msg = "UNEXPECTED"
+            //val = "UNEXPECTED";
+            //msg = "UNEXPECTED";
+            tResult.Result = "UNEXPECTED";
+            tResult.Assert = "UNEXPECTED";
     }
     compare (msg, val, exp, type, silent)
+    return tResult;
 }
   
-function basictests()
+
+function statusCode(code = null)
 {
-    var contentType = getContentType();
+    let contentType = getContentType();
+    //contentType = "jsodn";
+    tResult = {Msg : [], Result : null, Assert : null, Silent : true };
+
     if ( contentType == "json" )
     {
+        code = (code != null) ? code : 200;
         // Status Code
-        pm.test('Status code is 200', function (done) {
-            pm.response.to.have.statusCode(200);
-        });
+        tResult.Result = "Status code is [" + pm.response.code + "]";
+        if (pm.response.code != code) {
+            tResult.Assert = "Expected [" + code + "]";
+        }
     }
+ 
     else if ( contentType == "grpc" )
     {
+        code = (code != null) ? code : 0;
         // Status Code
-        pm.test('Status code is 0', function (done) {
-            pm.response.to.have.statusCode(0);
-        });
+        tResult.Result = "Status code is [" + pm.response.code + "]";
+        if (pm.response.code != code) {
+            tResult.Assert = "Expected [" + code + "]";
+        }
     }
     else
     {
-        console.log("Unsupported Content-Type [" + contentType + "] for BasicTest()")
-        pm.test('Unsupported Content-Type [' + contentType + '] for BasicTest() ', function (done) {
-            pm.expect('JSON or gRPC').to.eql(contentType, "sds");
-        });
+        tResult.Assert = 'Expect JSON or gRPC'
+        tResult.Msg.push("Unsupported Content-Type [" + contentType + "] for statusCode() Test");
+        tResult.Silent = false;
     }
+    return tResult;
 }
-  
+
+
 function setvar(varName, path, space)
 {
     var contentType = getContentType();
