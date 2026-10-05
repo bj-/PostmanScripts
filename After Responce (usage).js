@@ -80,7 +80,11 @@ setvar("VariableName", "info.result", "env"); // environment
 basictests()
 
 // MANDATORY FUNCTION in each request
-function test(path, exp, type, silent){
-    let x = utils.test(path, exp, type, silent);
-    console.log(x);
+function test(path, exp, type, silent = false) {
+    let r = utils.test(path, exp, type, silent);
+    //console.log(r);
+    if (!r.Silent || r.Assert) {
+        pm.test(r.Result, () => r.Assert && pm.expect.fail(r.Assert));
+        r.Msg?.forEach((element) => console.log(element));
+    }
 }

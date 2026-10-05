@@ -21,31 +21,40 @@ utils = {
 
 
 // ============== Functions ===============
+var tResult = {Msg : [], Result : null, Assert : null, Silent : null };
 // Public
-function test(path, exp, type, silent)
+function test(path, exp, type, silent = false)
 {
-    let ret = {Msg : null, Result : null, Assert : null};
+    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
+
+    //let ret = tResult;
+    //ret.Silent = Boolean(silent)
+    tResult.Silent = Boolean(silent)
+    //{Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
     let val;
 
-    //ret.Msg = "TTTTTTTTTTT";
-    //return ret;
+    //tResult.Msg.push("TTTTTTTTTTT");
+    //tResult.Msg.push("TTTTTTTTTTT22");
+    //return tResult;
     //return {Msg : "ffff", Result : "ggggg", Assert : "rrrrr"}
 
     var pathF = path.replace(".", ": ") + ":";
     if (type.toUpperCase().substring(0,5) == "ARRAY")
     {
-        msg = "Array [" + pathF + "]";
+        //msg = "Array [" + pathF + "]";
+        tResult.Result = "Array [" + pathF + "]";
     }
     else 
     {
-        msg = "Property [" + pathF + "] has value: ";
+        //msg = "Property [" + pathF + "] has value: ";
+        tResult.Result = "Property [" + pathF + "] has value: ";
     }
     
     var contentType = getContentType();
 
     if ( contentType == "json" )
     {
-
+    
         // If first node is array - must select path "pm.response.json()" without dot at end
         startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
         // Try to read key if it exist
@@ -63,8 +72,8 @@ function test(path, exp, type, silent)
                 pm.expect(eval(startPath + path)).to.be.exist;
 	        })
             */
-            ret.Result = "Variable [" + path + "] is undefined";
-            ret.Assert = "Please check Responce Body"
+            tResult.Result = "Variable [" + path + "] is undefined";
+            tResult.Assert = "Please check Responce Body"
 
             keyExist = false;
         }
@@ -75,7 +84,9 @@ function test(path, exp, type, silent)
         if ( keyExist )
         {
      	    val = eval(startPath + path);
-            ret = compare (msg, val, exp, type, silent);
+            
+            compare ("", val, exp, type, silent);
+            
             //ret = {Msg : "restAAAA", Result : "aaa", Assert : "bbb"};
         }
     }
@@ -85,44 +96,52 @@ function test(path, exp, type, silent)
         if(exist(path, val))
         {
             //compare (msg, val, exp, type, silent);
-            ret = compare (msg, val, exp, type, silent);
+            compare ("", val, exp, type, silent);
             //ret = {Msg : "GRPC is not supported", Result : "FFFF", Assert : "XXXX"};
         }
     }
     else
     {
         console.log("Unsupported Content-Type [" + contentType + "]");
-        ret.Msg = "Unsupported Content-Type [" + contentType + "]";
+        //ret.Msg = "";
+        tResult.Msg.push("Unsupported Content-Type [" + contentType + "]");
+
     }
-    return ret;
+    return tResult;
 }
 
-function compare (msg, val, exp, type, silent)
+function compare (msg, val, exp, type, silent = false)
 {
-    let ret = {Msg : null, Result : null, Assert : null};
+    
+    let ret = tResult;
     //console.log("Finction Compare start")
     //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
     type = type.toUpperCase();
 
     if ( val == exp && type == "eql".toUpperCase() )
     {
+        //return tResult;
         if (val.length > 50) // if val so long
         {
             val = val.substr(1,50) + "..."
         }
-        return show_pass(msg + '[' + val + '] as expected', silent)
+        tResult.Result += '[' + val + '] as expected';
+        show_pass(msg, silent)
     }
     else if (val < exp && type == "below".toUpperCase() )
     {
-        return show_pass(msg + '[' + val + '] below than [' + exp + '] as expected' , silent)
+        tResult.Result += '[' + val + '] below than [' + exp + '] as expected';
+        show_pass(msg, silent)
     }
     else if ( val > exp && type == "above".toUpperCase() )
     {
-        return show_pass(msg + '[' + val + '] above than [' + exp + '] as expected', silent)
+        tResult.Result += '[' + val + '] above than [' + exp + '] as expected';
+        show_pass(msg, silent)
     }
     else if ( type == "regex".toUpperCase() && eval(exp + '.test(val)') )
     {
-        return show_pass(msg + '[' + val + '] by regex [' + exp + '] as expected', silent)
+        tResult.Result += '[' + val + '] by regex [' + exp + '] as expected';
+        show_pass(msg, silent)
     }
     /*
     else if ( type == "ARRAY_SIZE_EQL" && val.length == exp )
@@ -132,15 +151,18 @@ function compare (msg, val, exp, type, silent)
     */
     else if ( (type == "below_count_array".toUpperCase() || type == "array_count_below".toUpperCase()) && val.length < parseInt(exp)) 
     {
-        return show_pass(msg + ' below than [' + exp + '] as expected', silent)
+        tResult.Result += ' below than [' + exp + '] as expected';
+        show_pass(msg, silent)
     }
     else if ( (type == "above_count_array".toUpperCase() || type == "array_count_above".toUpperCase()) && val.length > parseInt(exp) )
     {
-        return show_pass(msg + ' above than [' + exp + '] as expected', silent)
+        tResult.Result += ' above than [' + exp + '] as expected'
+        show_pass(msg, silent)
     }															 
     else if ( (type == "array_count".toUpperCase()) && val.length == parseInt(exp) )
     {
-        return show_pass(msg + ' count is [' + exp + '] as expected', silent)
+        tResult.Result += ' count is [' + exp + '] as expected';
+        show_pass(msg, silent)
     }															 
     else if ( type == "array".toUpperCase() )
     {  
@@ -150,15 +172,20 @@ function compare (msg, val, exp, type, silent)
             expResult = eval('elem["' + exp[0].replaceAll(".", '"]["') + '"]')
             if ( expResult == exp[1] )
             {
-                return show_pass(msg + ' has value: [' + expResult + '] in property [' + exp[0] + '] as expected', silent)
+                tResult.Result += ' has value: [' + expResult + '] in property [' + exp[0] + '] as expected';
+                show_pass(msg, silent)
                 valueFound = true
             }
         });
         if ( !valueFound )
             {
+                tResult.Result += ' has not value in elem [' + exp[0] + ']';
+                tResult.Assert = "Expected ["+ exp[1] +"], to be one of ["+ val +"]"
+                /*
                 pm.test(msg + ' has not value in elem [' + exp[0] + ']', () => {
-                pm.expect(exp[1]).to.be.oneOf(val);
+                    pm.expect(exp[1]).to.be.oneOf(val);
                 })
+                */
             }
     }
     else if ( type == "array_compare_keysInExp".toUpperCase() || type == "array_compare_expInKeys".toUpperCase() )
@@ -183,7 +210,7 @@ function compare (msg, val, exp, type, silent)
         arrayVal.forEach((element) => {
             if ( arrayExp.includes(element) )
             {
-                return show_pass(msg +  " has key [" + element + "] as expected", silent);
+                show_pass(msg +  " has key [" + element + "] as expected", silent);
             }
             else
             {
@@ -196,7 +223,7 @@ function compare (msg, val, exp, type, silent)
     }
     else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
     {
-        return show_pass(msg + '(random guid) [' + val + '] as expected', silent)
+        show_pass(msg + '(random guid) [' + val + '] as expected', silent)
     }
     else if ( exp == "(RANDOM_XML)" )
     {
@@ -208,7 +235,7 @@ function compare (msg, val, exp, type, silent)
             {
                 val = val.substr(1,50) + "..."
             }
-            return show_pass(msg + '(random XML) [' + val + '] as expected', silent)
+            show_pass(msg + '(random XML) [' + val + '] as expected', silent)
         }
         else
         {
@@ -224,17 +251,17 @@ function compare (msg, val, exp, type, silent)
         {
             val = val.substr(1,50) + "..."
         }
-        return show_pass(msg + ' [' + val + '] as expected', silent)
+        show_pass(msg + ' [' + val + '] as expected', silent)
     }
     else if ( exp == "(RANDOM_CERT)" && (/^[0-9a-fA-F]{40}$/.test(val)) )
     {
-        return show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
+        show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
     }
     else if ( type == "datetime".toUpperCase() )
     {
         if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
         {
-            return show_pass(msg + '[' + val + '] and has format as expected [' + exp + ']', silent)
+            show_pass(msg + '[' + val + '] and has format as expected [' + exp + ']', silent)
         }
         else
         {
@@ -245,20 +272,20 @@ function compare (msg, val, exp, type, silent)
     }
     else if ( exp == "NULL" && val == null)
     {
-        return show_pass(msg + ' [' + val + '] as expected', silent)
+        show_pass(msg + ' [' + val + '] as expected', silent)
     }
     else if ( exp == "EMPTY" && Object.keys(val).length == 0)
     {
-        return show_pass(msg + ' [' + 'HAS NO KEYS' + '] as expected', silent)
+        show_pass(msg + ' [' + 'HAS NO KEYS' + '] as expected', silent)
     }
     else if ( exp == "KEY_EXIST" && ( val != undefined || val == null ) )
     {
-        return show_pass(msg + ' [' + val + '] it is "Not Empty or Does Exist" as expected', silent)
+        show_pass(msg + ' [' + val + '] it is "Not Empty or Does Exist" as expected', silent)
     }
     else
     {
         //console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
-        ret.Result = msg;
+        //ret.Result = msg;
         //ret.Assert = 
         //pm.test(msg, () => {
             switch (type)
@@ -282,7 +309,7 @@ function compare (msg, val, exp, type, silent)
                 case "array_count".toUpperCase():
                     //console.log(val.length)
                     //pm.expect(parseInt(val.length)).to.equal(parseInt(exp))
-                    ret.Msg = "Array lenght is [" + val.length + "]";
+                    ret.Msg.push("Array lenght is [" + val.length + "]");
                     ret.Assert = "Current Array length [" + val + "] are not equal to expected len ["+ exp + "]";
                     break;
                 case "array_count_above".toUpperCase():
@@ -295,7 +322,8 @@ function compare (msg, val, exp, type, silent)
                     break;										 
                 default:
                     //pm.expect(exp).to.eql(val)
-                    ret.Assert = "Value [" + val + "] not equal to expected val ["+ exp + "]";
+                    ret.Result += "["+ val +"]";
+                    ret.Assert = "Expected ["+ exp + "]";
             }
         //});
     }  
@@ -452,19 +480,18 @@ function exist(path, check_var)
     return true
 }
 
+//function show_pass(msg = null, silent = false)
 function show_pass(msg, silent)
 {
-    if ( silent == null || silent == "" )
-    {
-        pm.test(msg);
-        return {Msg : null, Result : msg, Assert: null};
-    }
+    // TBD. if required to use some code
+    tResult.Result += msg;
+    //return tResult;
 }
 
 function getKeysfromJSONarray(arr)
 {
-    // Transform JSON array from ["key1": "val1, "key2": "val2"] â ["key1", "key2"] 
-    var ret = [];
+    // Transform JSON array from ["key1": "val1, "key2": "val2"] ? ["key1", "key2"] 
+    let ret = [];
     val.forEach((element) => {
         var keys = Object.keys(element);
         var key = keys[0];
