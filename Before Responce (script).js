@@ -97,3 +97,18 @@ function getRandomDateTime(from, to) {
     to = to.getTime();
     return new Date(from + Math.random() * (to - from));
 }
+
+// get admin account creds from env variable (from cred's array)
+function getAdminAccountCreds() {
+    let accountsJson = pm.environment.get("AdminAccounts");
+    console.log(accountsJson)
+    let accounts = JSON.parse(accountsJson);
+    // Select random index
+    let randomIndex = Math.floor(Math.random() * accounts.length);
+    let selectedAccount = accounts[randomIndex];
+
+    //console.log(selectedAccount)
+    return {login: selectedAccount.login, password : selectedAccount.password};
+    //pm.variables.set("current_login", selectedAccount.login);
+    //pm.variables.set("current_pass", selectedAccount.password);
+}

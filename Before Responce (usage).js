@@ -2,6 +2,19 @@
 // Target code, Variable space, Variable name (source), Variable name (target)
 convert("base64", "collection", "xml_tiny_signed", "xml_tiny_signed_base64")
 
+// get admin creds from env var's Array
+let creds = utils.getAdminAccountCreds();
+pm.variables.set("current_login", creds.login)
+pm.variables.set("current_pass", creds.password)
+// Create account List
+/*
+pm.environment.set(
+    "AdminAccounts", 
+    '[{"login": "root@example.com", "password": "password"}, {"login": "root2@example.com", "password2": "password"}]'
+);
+*/
+
+
 //pm.collectionVariables.set("varName", "val");
 
 // randomString

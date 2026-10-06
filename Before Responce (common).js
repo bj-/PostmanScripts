@@ -7,5 +7,8 @@ utils = {
   },
   randomString: function(length=1) {
     return randomString(length)
+  },
+  getAdminAccountCreds: function() {
+    return getAdminAccountCreds()
   }
 };
