@@ -223,7 +223,8 @@ function compare (msg, val, exp, type, silent = false)
     }
     else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
     {
-        show_pass(msg + '(random guid) [' + val + '] as expected', silent)
+        tResult.Result += '(random guid) [' + val + '] as expected';
+        show_pass(msg, silent)
     }
     else if ( exp == "(RANDOM_XML)" )
     {
@@ -261,13 +262,18 @@ function compare (msg, val, exp, type, silent = false)
     {
         if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
         {
-            show_pass(msg + '[' + val + '] and has format as expected [' + exp + ']', silent)
+            tResult.Result += '[' + val + '] and has format as expected [' + exp + ']';
+            show_pass(msg, silent)
         }
         else
         {
+            tResult.Result += '[' + val + ']';
+            tResult.Assert = 'Expected format [' + exp + ']';
+            /*
             pm.test(msg + "(DATETIME FORMAT) ", () => {
                 pm.expect(exp).to.eql(val)
             })
+            */
         }
     }
     else if ( exp == "NULL" && val == null)
