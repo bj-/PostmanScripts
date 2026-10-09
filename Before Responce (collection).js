@@ -1,47 +1,202 @@
 // =====================================================================
-// Before Request - единый файл для скрипта уровня КОЛЛЕКЦИИ (Pre-request)
+// After Response — единый файл для скрипта уровня КОЛЛЕКЦИИ (Post-response)
 // (объединены бывшие common + script: фасад utils сверху, реализация ниже)
-// Функции ничего не пишут в консоль (она не показывается из подключаемого кода).
-// Ошибки настройки - через throw: исключение видно в интерфейсе Postman.
+//
+// ПРАВИЛО: код здесь НЕ вызывает pm.test() и console.log() — Postman не
+// показывает их вывод, если они вызваны из подключаемой функции.
+// Каждая функция только считает и ВОЗВРАЩАЕТ объект результата:
+//   { Msg: [], Result: "", Assert: null, Silent: false, Value: undefined, Var: null }
+//     Result - заголовок pm.test
+//     Assert - текст ошибки (null = тест пройден)
+//     Silent - true: показывать тест только при падении
+//     Msg    - строки для console.log (печатает запрос)
+//     Value/Var - для setvar (переменную выставляет запрос)
+// pm.test / console.log / pm.*.set выполняет функция report() внутри запроса
+// (см. After Responce (usage).js).
 // =====================================================================
 
-// Фасад: именно его вызывают скрипты запросов (utils.convert(...), utils.getAdminAccountCreds() и т.д.)
+// Фасад: именно его вызывают скрипты запросов (utils.test(...), utils.check(...) и т.д.)
 utils = {
-  convert: function (dest, var_space, src_var, target_var) { return convert(dest, var_space, src_var, target_var); },
-  randomVal: function (type, min = null, max = null, length = 1) { return randomVal(type, min, max, length); },
+  statusCode:   function (code) { return statusCode(code); },
+  test:         function (path, exp, type, silent) { return test(path, exp, type, silent); },
+  check:        function (parameter, exp, type, silent) { return check(parameter, exp, type, silent); },
+  header:       function (name, exp, type, silent) { return header(name, exp, type, silent); },
+  schema:       function (schemaObj, silent) { return schema(schemaObj, silent); },
+  basictests:   function (code) { return basictests(code); },
+  setvar:       function (varName, path, space) { return setvar(varName, path, space); },
+  getvar:       function (varName, space = "collection") { return getvar(varName, space); },
   randomString: function (length = 1) { return randomString(length); },
-  getAdminAccountCreds: function () { return getAdminAccountCreds(); }
 };
 
-// ============== Functions ===============
 
-// Кодирует переменную и кладёт результат в целевую; возвращает закодированное значение
-function convert(dest, var_space, src_var, target_var)
+// ============== Constants ===============
+var FW_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+var FW_CERT_RE = /^[0-9a-fA-F]{40}$/;
+var FW_DATETIME_FORMATS = {
+  "YYYY-MM-DDThh:mm:ss.tttZ": /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{1,3}Z$/,
+  "YYYY-MM-DDThh:mm:ssZ":     /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/,
+  "YYYY-MM-DD":               /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
+};
+
+
+// ============== Public API ===============
+
+// Проверка значения в теле ответа по пути (a.b[0].c | [0].a | "" - корень)
+function test(path, exp, type, silent = false)
 {
-    let src_val;
-    switch (var_space)
-    {
-        case "collection": src_val = pm.collectionVariables.get(src_var); break;
-        case "env":        src_val = pm.environment.get(src_var); break;
-        default: throw new Error("convert: unsupported variable space [" + var_space + "]");
-    }
-    if (src_val === undefined || src_val === null)
-        throw new Error("convert: variable [" + src_var + "] is not set in [" + var_space + "]");
+    const r = newResult(silent);
+    const pathF = String(path).replace(".", ": ") + ":";
+    r.Result = (String(type).toUpperCase().substring(0, 5) === "ARRAY")
+        ? "Array [" + pathF + "]"
+        : "Property [" + pathF + "] has value: ";
 
-    let encoded;
-    if (String(dest).toLowerCase() === "base64")
+    const body = readBody(r);
+    if (!body.ok) return r;
+
+    const g = getByPath(body.data, path);
+    if (!g.found)
     {
-        const CryptoJS = require("crypto-js");
-        encoded = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(String(src_val)));
-    }
-    else
-    {
-        throw new Error("convert: unsupported destination [" + dest + "]");
+        if (String(exp) === "KEY_NOT_EXIST")
+        {
+            r.Result = "Property [" + path + "] does not exist as expected";
+            return r;
+        }
+        r.Result = "Variable [" + path + "] is undefined";
+        r.Assert = "Please check Response Body";
+        return r;
     }
 
-    if (var_space === "env") pm.environment.set(target_var, encoded);
-    else pm.collectionVariables.set(target_var, encoded);
-    return encoded;
+    compare(r, g.value, exp, type);
+    return r;
+}
+
+// Проверка служебных параметров ответа: statusCode | responseTime | contentLength
+function check(parameter, exp, type, silent = false)
+{
+    const r = newResult(silent);
+    let val;
+    switch (parameter)
+    {
+        case "statusCode":
+            val = pm.response.code;
+            r.Result = "Status code is ";
+            break;
+        case "responseTime":
+            val = pm.response.responseTime;
+            r.Result = "Response Time is ";
+            break;
+        case "contentLength":
+            val = pm.response.headers.get("Content-Length");
+            r.Result = "Content Length is ";
+            break;
+        default:
+            r.Result = "UNEXPECTED parameter [" + parameter + "]";
+            r.Assert = "Supported: statusCode | responseTime | contentLength";
+            r.Silent = false;
+            return r;
+    }
+    compare(r, val, exp, type);
+    return r;
+}
+
+// Проверка заголовка ответа
+function header(name, exp, type, silent = false)
+{
+    const r = newResult(silent);
+    const val = pm.response.headers.get(name);
+    if (val === undefined || val === null)
+    {
+        if (String(exp) === "KEY_NOT_EXIST")
+        {
+            r.Result = "Header [" + name + "] does not exist as expected";
+            return r;
+        }
+        r.Result = "Header [" + name + "] is undefined";
+        r.Assert = "Header is missing in response";
+        r.Silent = false;
+        return r;
+    }
+    r.Result = "Header [" + name + "] has value: ";
+    compare(r, val, exp, type);
+    return r;
+}
+
+// Статус-код: по умолчанию 200 (REST) или 0 (gRPC). Тихий, виден только при падении.
+function statusCode(code = null)
+{
+    const r = newResult(true);
+    const expected = (code !== null && code !== undefined) ? code : (getContentType() === "grpc" ? 0 : 200);
+    r.Result = "Status code is [" + pm.response.code + "]";
+    if (pm.response.code != expected) r.Assert = "Expected [" + expected + "]";
+    return r;
+}
+
+// Базовые тесты: статус-код + Content-Type. Возвращает МАССИВ результатов.
+function basictests(code = null)
+{
+    const sc = statusCode(code);
+    sc.Silent = false;
+    const ct = newResult(false);
+    ct.Result = "Content-Type is ";
+    compare(ct, pm.response.headers.get("Content-Type"), "/^application\\/(json|grpc)/", "regex");
+    return [sc, ct];
+}
+
+// Валидация тела по JSON Schema (ajv есть в песочнице Postman; nullable из OpenAPI поддержан)
+function schema(schemaObj, silent = false)
+{
+    const r = newResult(silent);
+    r.Result = "Response body matches JSON schema";
+    const body = readBody(r);
+    if (!body.ok) return r;
+    try
+    {
+        const Ajv = require("ajv");
+        const ajv = new Ajv({ allErrors: true, nullable: true });
+        const validate = ajv.compile(schemaObj);
+        if (!validate(body.data))
+        {
+            r.Assert = validate.errors
+                .map((e) => (e.dataPath || e.instancePath || "(root)") + " " + e.message)
+                .join("; ");
+        }
+    }
+    catch (e)
+    {
+        r.Assert = "Schema validation error: " + e.message;
+    }
+    return r;
+}
+
+// Читает значение из ответа. Переменную выставляет запрос (setVar в usage), а не библиотека.
+function setvar(varName, path, space = "collection")
+{
+    const r = newResult(true);
+    r.Result = "Variable [" + varName + "] is set from [" + path + "]";
+    r.Var = { name: varName, space: space };
+
+    const body = readBody(r);
+    if (!body.ok) return r;
+
+    const g = getByPath(body.data, path);
+    if (!g.found)
+    {
+        r.Result = "Variable [" + path + "] is undefined";
+        r.Assert = "Cannot set [" + varName + "]: path not found in response";
+        return r;
+    }
+    r.Value = g.value;
+    return r;
+}
+
+function getvar(varName, space = "collection")
+{
+    switch (String(space).toUpperCase())
+    {
+        case "ENV":   return pm.environment.get(varName);
+        case "LOCAL": return pm.variables.get(varName);
+        default:      return pm.collectionVariables.get(varName);
+    }
 }
 
 function randomString(length = 1)
@@ -52,62 +207,764 @@ function randomString(length = 1)
     return s;
 }
 
-// Usage: см. "Before Responce (usage).js"
-var FW_RANDOM_TEXT = "Flat Earth is an archaic and scientifically disproven conception of the Earth's shape as a plane or disk. Many ancient cultures subscribed to a flat-Earth cosmography, notably including ancient near eastern cosmology. The model has undergone a recent resurgence as a conspiracy theory. The idea of a spherical Earth appeared in ancient Greek philosophy with Pythagoras (6th century BC). However, most pre-Socratics (6thľ5th century BC) retained the flat-Earth model. In the early 4th century BC, Plato wrote about a spherical Earth. By about 330 BC, his former student Aristotle had provided strong empirical evidence for a spherical Earth. Knowledge of the Earth's global shape gradually began to spread beyond the Hellenistic world. By the early period of the Christian Church, the spherical view was widely held, with some notable exceptions. In contrast, ancient Chinese scholars consistently describe the Earth as flat, and this perception remained unchanged until their encounters with Jesuit missionaries in the 17th century.[6] Traditionalist Muslim scholars have maintained that the earth is flat, though, since the 9th century, Muslim scholars tended to believe in a spherical Earth. It is a historical myth that medieval Europeans generally thought the Earth was flat.[9] This myth was created in the 17th century by Protestants to argue against Catholic teachings.[10] More recently, flat earth theory has seen an increase in popularity with modern flat Earth societies, and unaffiliated individuals using social media. Despite the scientific facts and obvious effects of Earth's sphericity, pseudoscientific[13] flat-Earth conspiracy theories persist. In a 2018 study reported on by Scientific American, only 82% of 18 to 24 year old respondents agreed with the statement I have always believed the world is round. However, a firm belief in a flat Earth is rare, with less than 2% acceptance in all age groups.";
 
-function randomVal(type, min = null, max = null, length = 1)
+// ============== Comparison ===============
+
+function compare(r, val, exp, type)
 {
-    const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
-    switch (String(type).toUpperCase())
+    const T = String(type).toUpperCase();
+
+    // ---- scalar
+    if (T === "EQL" && val == exp)
+        return pass(r, "[" + show(val) + "] as expected");
+    if (T === "BELOW" && val < exp)
+        return pass(r, "[" + show(val) + "] below than [" + exp + "] as expected");
+    if (T === "ABOVE" && val > exp)
+        return pass(r, "[" + show(val) + "] above than [" + exp + "] as expected");
+
+    if (T === "REGEX")
     {
-        case "INT":
-            return rnd(min === null ? 0 : min, max === null ? 100 : max);
-        case "INN":
-            return rnd(100000000000, 999999999999);
-        case "SNILS_F":
-            return rnd(100, 999) + "-" + rnd(100, 999) + "-" + rnd(100, 999) + " " + rnd(10, 99);
-        case "SNILS":
-            return rnd(10000000000, 99999999999);
-        case "STRING":
-            return randomString(length);
-        case "DATE":
-            return getRandomDateTime(new Date(min), new Date(max)).toISOString().substring(0, 10);
-        case "DATETIME":
-            return getRandomDateTime(new Date(min), new Date(max)).toISOString();
-        case "TEXT":
+        try
         {
-            const start = rnd(0, Math.max(0, FW_RANDOM_TEXT.length - length));
-            return FW_RANDOM_TEXT.substring(start, start + length);
+            if (toRegExp(exp).test(String(val)))
+                return pass(r, "[" + show(val) + "] by regex [" + exp + "] as expected");
         }
-        case "BOOLEAN":
-            return Math.random() >= 0.5;
-        default:
-            return "NoRandom";
+        catch (e)
+        {
+            return fail(r, "[" + show(val) + "]", "Invalid regex [" + exp + "]: " + e.message);
+        }
+        return fail(r, "[" + show(val) + "]", "Does not match regex [" + exp + "]");
+    }
+
+    // ---- arrays
+    if (T.substring(0, 5) === "ARRAY" || T.slice(-12) === "_COUNT_ARRAY")
+    {
+        if (!Array.isArray(val))
+            return fail(r, " is not an array: [" + show(val) + "]", "Expected array");
+        const len = val.length;
+        const n = parseInt(exp, 10);
+
+        switch (T)
+        {
+            case "ARRAY_COUNT":
+                return (len === n)
+                    ? pass(r, " count is [" + exp + "] as expected")
+                    : fail(r, " count is [" + len + "]", "Array length is [" + len + "], expected [" + exp + "]");
+
+            case "ARRAY_COUNT_ABOVE":
+            case "ABOVE_COUNT_ARRAY":
+                return (len > n)
+                    ? pass(r, " above than [" + exp + "] as expected")
+                    : fail(r, " count is [" + len + "]", "Array length [" + len + "] is not above [" + exp + "]");
+
+            case "ARRAY_COUNT_BELOW":
+            case "BELOW_COUNT_ARRAY":
+                return (len < n)
+                    ? pass(r, " below than [" + exp + "] as expected")
+                    : fail(r, " count is [" + len + "]", "Array length [" + len + "] is not below [" + exp + "]");
+
+            case "ARRAY":
+            {
+                // exp = ["path.in.element", expectedValue]
+                const idx = val.findIndex((el) => { const g = getByPath(el, exp[0]); return g.found && g.value == exp[1]; });
+                if (idx >= 0)
+                    return pass(r, " has value: [" + exp[1] + "] in property [" + exp[0] + "] as expected");
+                const values = val.map((el) => getByPath(el, exp[0]).value);
+                return fail(r, " has not value in elem [" + exp[0] + "]",
+                    "Expected [" + exp[1] + "], to be one of [" + show(values, 200) + "]");
+            }
+
+            case "ARRAY_COMPARE_KEYSINEXP":
+            case "ARRAY_COMPARE_EXPINKEYS":
+            {
+                if (!Array.isArray(exp)) return fail(r, "", "Expected value must be an array of keys");
+                const respKeys = Array.from(new Set(val.flatMap((el) => (el && typeof el === "object") ? Object.keys(el) : [])));
+                const keysInExp = (T === "ARRAY_COMPARE_KEYSINEXP");
+                const from = keysInExp ? respKeys : exp;
+                const into = keysInExp ? exp : respKeys;
+                const where = keysInExp ? "exp list" : "response";
+                const missing = from.filter((k) => !into.includes(k));
+                return missing.length === 0
+                    ? pass(r, " has keys [" + from.join(", ") + "] in " + where + " as expected")
+                    : fail(r, " keys [" + from.join(", ") + "]", "Keys [" + missing.join(", ") + "] do not exist in " + where);
+            }
+
+            default:
+                return fail(r, "", "Unknown array comparison type [" + type + "]");
+        }
+    }
+
+    // ---- special expected tokens
+    if (exp === "(RANDOM_GUID)")
+        return FW_GUID_RE.test(String(val))
+            ? pass(r, "(random guid) [" + show(val) + "] as expected")
+            : fail(r, "[" + show(val) + "]", "Expected GUID format");
+
+    if (exp === "(RANDOM_CERT)")
+        return FW_CERT_RE.test(String(val))
+            ? pass(r, "(random certificate) [" + show(val) + "] as expected")
+            : fail(r, "[" + show(val) + "]", "Expected certificate thumbprint (40 hex chars)");
+
+    if (exp === "(RANDOM_PROPERTY)")
+        return pass(r, "[" + show(val) + "] as expected");
+
+    if (exp === "(RANDOM_XML)")
+    {
+        let ok = false;
+        try { require("xml2js").parseString(String(val), (err, res) => { ok = !err && !!res; }); } catch (e) { ok = false; }
+        return ok
+            ? pass(r, "(random XML) [" + show(val) + "] as expected")
+            : fail(r, "(random XML)", "Value is not valid XML");
+    }
+
+    if (T === "DATETIME")
+    {
+        const re = FW_DATETIME_FORMATS[exp];
+        if (!re) return fail(r, "[" + show(val) + "]", "Unsupported datetime format [" + exp + "]. Supported: " + Object.keys(FW_DATETIME_FORMATS).join(" | "));
+        return re.test(String(val))
+            ? pass(r, "[" + show(val) + "] and has format as expected [" + exp + "]")
+            : fail(r, "[" + show(val) + "]", "Expected format [" + exp + "]");
+    }
+
+    if (exp === "NULL")
+        return (val === null)
+            ? pass(r, "[null] as expected")
+            : fail(r, "[" + show(val) + "]", "Expected [null]");
+
+    if (exp === "EMPTY")
+    {
+        const empty = (val === "") || (val !== null && typeof val === "object" && Object.keys(val).length === 0);
+        return empty
+            ? pass(r, "[EMPTY] as expected")
+            : fail(r, "[" + show(val) + "]", "Expected empty value ('', {} or [])");
+    }
+
+    if (exp === "KEY_EXIST")
+        return pass(r, "[" + show(val) + "] it is \"Not Empty or Does Exist\" as expected");
+
+    if (exp === "KEY_NOT_EXIST")
+        return fail(r, "[" + show(val) + "]", "Property must not exist, but it is in the response");
+
+    // ---- mismatch
+    switch (T)
+    {
+        case "ABOVE": return fail(r, "[" + show(val) + "]", "[" + show(val) + "] is not above expected [" + exp + "]");
+        case "BELOW": return fail(r, "[" + show(val) + "]", "[" + show(val) + "] is not below expected [" + exp + "]");
+        default:      return fail(r, "[" + show(val) + "]", "Expected [" + show(exp) + "]");
     }
 }
 
-// internal functions
-function getRandomDateTime(from, to)
+
+// ============== Internal helpers ===============
+
+function newResult(silent = false)
 {
-    from = from.getTime();
-    to = to.getTime();
-    return new Date(from + Math.random() * (to - from));
+    return { Msg: [], Result: "", Assert: null, Silent: Boolean(silent), Value: undefined, Var: null };
 }
 
-// Учётка администратора из env-переменной AdminAccounts (JSON-массив [{login, password}]) - случайная
-function getAdminAccountCreds()
+function pass(r, text) { r.Result += text; r.Assert = null; return r; }
+function fail(r, text, assert) { r.Result += text; r.Assert = assert; return r; }
+
+// Короткое представление значения для заголовка теста
+function show(v, max = 50)
 {
-    const raw = pm.environment.get("AdminAccounts");
-    if (!raw) throw new Error("Environment variable [AdminAccounts] is not set");
-
-    let accounts;
-    try { accounts = JSON.parse(raw); }
-    catch (e) { throw new Error("[AdminAccounts] is not valid JSON: " + e.message); }
-    if (!Array.isArray(accounts) || accounts.length === 0)
-        throw new Error("[AdminAccounts] must be a non-empty array of {login, password}");
-
-    const acc = accounts[Math.floor(Math.random() * accounts.length)];
-    if (!acc.login || !acc.password)
-        throw new Error("[AdminAccounts] item must have [login] and [password]");
-    return { login: acc.login, password: acc.password };
+    let s;
+    if (typeof v === "string") s = v;
+    else { try { s = JSON.stringify(v); } catch (e) { s = String(v); } }
+    s = String(s);
+    return s.length > max ? s.substring(0, max) + "..." : s;
 }
+
+// "/^abc$/i" | "abc" | RegExp -> RegExp
+function toRegExp(exp)
+{
+    if (exp instanceof RegExp) return exp;
+    const s = String(exp);
+    const m = s.match(/^\/([\s\S]*)\/([a-z]*)$/);
+    return m ? new RegExp(m[1], m[2]) : new RegExp(s);
+}
+
+// Безопасный (без eval) доступ по пути: a.b[0].c | [0].a | ["key.with.dot"] | ""
+// found=false, если ключа нет (отличает "нет ключа" от "значение undefined/null")
+function getByPath(obj, path)
+{
+    if (path === "" || path === null || path === undefined) return { found: true, value: obj };
+    const tokens = [];
+    String(path).replace(/\[(\d+)\]|\[["']([^"']+)["']\]|([^.\[\]]+)/g, (m, idx, quoted, name) => {
+        tokens.push(idx !== undefined ? Number(idx) : (quoted !== undefined ? quoted : name));
+        return m;
+    });
+    let cur = obj;
+    for (const t of tokens)
+    {
+        if (cur === null || cur === undefined || typeof cur !== "object" || !(t in cur))
+            return { found: false, value: undefined };
+        cur = cur[t];
+    }
+    return { found: true, value: cur };
+}
+
+function getContentType()
+{
+    const h = pm.response.headers.get("Content-Type") || "";
+    if (/^application\/([\w.+-]*\+)?json/i.test(h)) return "json";
+    if (/^application\/grpc/i.test(h)) return "grpc";
+    return h || "(none)";
+}
+
+// Читает тело ответа. При ошибке заполняет r и возвращает ok=false.
+function readBody(r)
+{
+    const ct = getContentType();
+    try
+    {
+        if (ct === "json") return { ok: true, data: pm.response.json() };
+        if (ct === "grpc") return { ok: true, data: pm.response.messages.all()[0].data };
+    }
+    catch (e)
+    {
+        r.Result = "Cannot read response body";
+        r.Assert = e.message;
+        r.Silent = false;
+        return { ok: false };
+    }
+    r.Result = "Unsupported Content-Type [" + ct + "]";
+    r.Assert = "Expect JSON or gRPC";
+    r.Silent = false;
+    return { ok: false };
+}
+
+
+// ============== Obsolete (backward compatibility) ===============
+function test_grpc(path, exp, type, silent)
+{
+    return test(path, exp, type, silent);
+}
+
+
+/*
+utils = {
+  statusCode: function() {
+    return statusCode();
+  },
+  test: function(path, exp, type, silent) {
+   return test(path, exp, type, silent);
+  },
+  check: function(parameter, exp, type, silent) {
+    return check(parameter, exp, type, silent);
+  },
+  setvar: function(varName, path, space) {
+    setvar(varName, path, space);
+  },
+  getvar: function(varName, space="collection") {
+    return getvar(varName, space);
+  },
+  randomString: function(length=1) {
+    return randomString(length)
+  },
+};
+
+
+// ============== Functions ===============
+var tResult = {Msg : [], Result : null, Assert : null, Silent : null };
+// Public
+function test(path, exp, type, silent = false)
+{
+    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
+
+    //let ret = tResult;
+    //ret.Silent = Boolean(silent)
+    tResult.Silent = Boolean(silent)
+    //{Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
+    let val;
+
+    //tResult.Msg.push("TTTTTTTTTTT");
+    //tResult.Msg.push("TTTTTTTTTTT22");
+    //return tResult;
+    //return {Msg : "ffff", Result : "ggggg", Assert : "rrrrr"}
+
+    var pathF = path.replace(".", ": ") + ":";
+    if (type.toUpperCase().substring(0,5) == "ARRAY")
+    {
+        //msg = "Array [" + pathF + "]";
+        tResult.Result = "Array [" + pathF + "]";
+    }
+    else 
+    {
+        //msg = "Property [" + pathF + "] has value: ";
+        tResult.Result = "Property [" + pathF + "] has value: ";
+    }
+    
+    var contentType = getContentType();
+
+    if ( contentType == "json" )
+    {
+    
+        // If first node is array - must select path "pm.response.json()" without dot at end
+        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
+        // Try to read key if it exist
+        var keyExist = true;
+        try
+        {
+            val = eval(startPath + path);
+    	}
+    	catch(e)
+    	{
+            //console.error(e);
+            //console.error(e.message);
+            
+            tResult.Result = "Variable [" + path + "] is undefined";
+            tResult.Assert = "Please check Responce Body"
+
+            keyExist = false;
+        }
+
+        //return {Msg : pm.response.json(), Result : "ggs2sggg", Assert : "rrrrr"}
+
+
+        if ( keyExist )
+        {
+     	    val = eval(startPath + path);
+            
+            compare ("", val, exp, type, silent);
+            
+            //ret = {Msg : "restAAAA", Result : "aaa", Assert : "bbb"};
+        }
+    }
+    else if ( contentType == "grpc" )
+    {
+        val = eval('pm.response.messages.all()[0].data.' + path);
+        if(exist(path, val))
+        {
+            //compare (msg, val, exp, type, silent);
+            compare ("", val, exp, type, silent);
+            //ret = {Msg : "GRPC is not supported", Result : "FFFF", Assert : "XXXX"};
+        }
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]");
+        //ret.Msg = "";
+        tResult.Msg.push("Unsupported Content-Type [" + contentType + "]");
+
+    }
+    return tResult;
+}
+
+function compare (msg, val, exp, type, silent = false)
+{
+    
+    let ret = tResult;
+    //console.log("Finction Compare start")
+    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
+    type = type.toUpperCase();
+
+    if ( val == exp && type == "eql".toUpperCase() )
+    {
+        //return tResult;
+        if (val.length > 50) // if val so long
+        {
+            val = val.substr(1,50) + "..."
+        }
+        tResult.Result += '[' + val + '] as expected';
+        show_pass(msg, silent)
+    }
+    else if (val < exp && type == "below".toUpperCase() )
+    {
+        tResult.Result += '[' + val + '] below than [' + exp + '] as expected';
+        show_pass(msg, silent)
+    }
+    else if ( val > exp && type == "above".toUpperCase() )
+    {
+        tResult.Result += '[' + val + '] above than [' + exp + '] as expected';
+        show_pass(msg, silent)
+    }
+    else if ( type == "regex".toUpperCase() && eval(exp + '.test(val)') )
+    {
+        tResult.Result += '[' + val + '] by regex [' + exp + '] as expected';
+        show_pass(msg, silent)
+    }
+    
+    else if ( (type == "below_count_array".toUpperCase() || type == "array_count_below".toUpperCase()) && val.length < parseInt(exp)) 
+    {
+        tResult.Result += ' below than [' + exp + '] as expected';
+        show_pass(msg, silent)
+    }
+    else if ( (type == "above_count_array".toUpperCase() || type == "array_count_above".toUpperCase()) && val.length > parseInt(exp) )
+    {
+        tResult.Result += ' above than [' + exp + '] as expected'
+        show_pass(msg, silent)
+    }															 
+    else if ( (type == "array_count".toUpperCase()) && val.length == parseInt(exp) )
+    {
+        tResult.Result += ' count is [' + exp + '] as expected';
+        show_pass(msg, silent)
+    }															 
+    else if ( type == "array".toUpperCase() )
+    {  
+        valueFound = false
+        val.forEach(function(elem)
+        {
+            expResult = eval('elem["' + exp[0].replaceAll(".", '"]["') + '"]')
+            if ( expResult == exp[1] )
+            {
+                tResult.Result += ' has value: [' + expResult + '] in property [' + exp[0] + '] as expected';
+                show_pass(msg, silent)
+                valueFound = true
+            }
+        });
+        if ( !valueFound )
+            {
+                tResult.Result += ' has not value in elem [' + exp[0] + ']';
+                tResult.Assert = "Expected ["+ exp[1] +"], to be one of ["+ val +"]"
+
+            }
+    }
+    else if ( type == "array_compare_keysInExp".toUpperCase() || type == "array_compare_expInKeys".toUpperCase() )
+    {
+        // Compare arrays: responce keys in array and Expect list
+        if ( type == "array_compare_keysInExp".toUpperCase() )
+        {
+            // Keys in responce array is exist in exp's array
+            var arrayVal = getKeysfromJSONarray(val);
+            var arrayExp = exp;
+            var msgAdd = "exp list"
+
+        }
+        else if (type == "array_compare_expInKeys".toUpperCase())
+        {
+            // Items (keys list) in exp's array is exist in responce array
+            var arrayVal = exp;
+            var arrayExp = getKeysfromJSONarray(val);
+            var msgAdd = "responce"
+        }
+
+        arrayVal.forEach((element) => {
+            if ( arrayExp.includes(element) )
+            {
+                show_pass(msg +  " has key [" + element + "] as expected", silent);
+            }
+            else
+            {
+                pm.test(msg + " key [" + element + "] does not exist in " + msgAdd, () => {
+                    pm.expect(element).to.include(arrayExp)
+                });
+
+            }
+        })
+    }
+    else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
+    {
+        tResult.Result += '(random guid) [' + val + '] as expected';
+        show_pass(msg, silent)
+    }
+    else if ( exp == "(RANDOM_XML)" )
+    {
+        var parseString = require('xml2js').parseString;
+        parseString(val, function (err, result) {
+        if (result)
+        {
+            if ( val.length > 50 ) // if val so long
+            {
+                val = val.substr(1,50) + "..."
+            }
+            show_pass(msg + '(random XML) [' + val + '] as expected', silent)
+        }
+        else
+        {
+            pm.test(msg + '(random XML)', () => {
+                pm.expect(val).to.eql("(random XML)")
+            })
+        }
+        });
+    }
+    else if ( exp == "(RANDOM_PROPERTY)" )
+    {
+        if (val.length > 50) // if val so long
+        {
+            val = val.substr(1,50) + "..."
+        }
+        show_pass(msg + ' [' + val + '] as expected', silent)
+    }
+    else if ( exp == "(RANDOM_CERT)" && (/^[0-9a-fA-F]{40}$/.test(val)) )
+    {
+        show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
+    }
+    else if ( type == "datetime".toUpperCase() )
+    {
+        if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
+        {
+            tResult.Result += '[' + val + '] and has format as expected [' + exp + ']';
+            show_pass(msg, silent)
+        }
+        else
+        {
+            tResult.Result += '[' + val + ']';
+            tResult.Assert = 'Expected format [' + exp + ']';
+
+        }
+    }
+    else if ( exp == "NULL" && val == null)
+    {
+        show_pass(msg + ' [' + val + '] as expected', silent)
+    }
+    else if ( exp == "EMPTY" && Object.keys(val).length == 0)
+    {
+        show_pass(msg + ' [' + 'HAS NO KEYS' + '] as expected', silent)
+    }
+    else if ( exp == "KEY_EXIST" && ( val != undefined || val == null ) )
+    {
+        show_pass(msg + ' [' + val + '] it is "Not Empty or Does Exist" as expected', silent)
+    }
+    else
+    {
+        //console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
+        //ret.Result = msg;
+        //ret.Assert = 
+        //pm.test(msg, () => {
+            switch (type)
+            {
+                case "above".toUpperCase():
+                    //pm.expect(parseInt(val)).to.above(parseInt(exp))
+                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
+                    break;
+                case "below".toUpperCase():
+                    //pm.expect(parseInt(val)).to.below(parseInt(exp))
+                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
+                    break;
+                case "above_count_array".toUpperCase():
+                    //pm.expect(parseInt(val.length)).to.above(parseInt(exp))
+                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
+                    break;
+                case "below_count_array".toUpperCase():
+                    //pm.expect(parseInt(val.length)).to.below(parseInt(exp))
+                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
+                    break;										 
+                case "array_count".toUpperCase():
+                    //console.log(val.length)
+                    //pm.expect(parseInt(val.length)).to.equal(parseInt(exp))
+                    ret.Msg.push("Array lenght is [" + val.length + "]");
+                    ret.Assert = "Current Array length [" + val + "] are not equal to expected len ["+ exp + "]";
+                    break;
+                case "array_count_above".toUpperCase():
+                    //pm.expect(parseInt(val.length)).to.above(parseInt(exp))
+                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
+                    break;
+                case "array_count_below".toUpperCase():
+                    //pm.expect(parseInt(val.length)).to.below(parseInt(exp))
+                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
+                    break;										 
+                default:
+                    //pm.expect(exp).to.eql(val)
+                    ret.Result += "["+ val +"]";
+                    ret.Assert = "Expected ["+ exp + "]";
+            }
+        //});
+    }  
+    return ret;
+}
+  
+function check(parameter, exp, type, silent)
+{
+    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
+    let msg = ''
+
+    switch (parameter)
+    {
+        case "statusCode":
+            val = (pm.response.statusCode === undefined ) ? pm.response.code : pm.response.statusCode;
+            tResult.Result = "Status code is ";
+            //tResult.Msg.push("parameter ["+parameter+"], exp ["+exp+"], type ["+type+"], silent ["+silent+"]");
+            break;
+        case "responseTime":
+            val = pm.response.responseTime
+            //msg = 'Response Time is '
+            tResult.Result = "Response Time is";
+            break;
+        case "contentLength":
+            val = pm.response.headers.get("Content-Length");
+            tResult.Result = "Content Length is ";
+            //msg = 'Content Length is '
+            break;
+        default:
+            //val = "UNEXPECTED";
+            //msg = "UNEXPECTED";
+            tResult.Result = "UNEXPECTED";
+            tResult.Assert = "UNEXPECTED";
+    }
+    compare (msg, val, exp, type, silent)
+    return tResult;
+}
+  
+
+function statusCode(code = null)
+{
+    let contentType = getContentType();
+    //contentType = "jsodn";
+    tResult = {Msg : [], Result : null, Assert : null, Silent : true };
+
+    if ( contentType == "json" )
+    {
+        code = (code != null) ? code : 200;
+        // Status Code
+        tResult.Result = "Status code is [" + pm.response.code + "]";
+        if (pm.response.code != code) {
+            tResult.Assert = "Expected [" + code + "]";
+        }
+    }
+ 
+    else if ( contentType == "grpc" )
+    {
+        code = (code != null) ? code : 0;
+        // Status Code
+        tResult.Result = "Status code is [" + pm.response.code + "]";
+        if (pm.response.code != code) {
+            tResult.Assert = "Expected [" + code + "]";
+        }
+    }
+    else
+    {
+        tResult.Assert = 'Expect JSON or gRPC'
+        tResult.Msg.push("Unsupported Content-Type [" + contentType + "] for statusCode() Test");
+        tResult.Silent = false;
+    }
+    return tResult;
+}
+
+
+function setvar(varName, path, space)
+{
+    var contentType = getContentType();
+    if ( contentType == "json" )
+    {
+        // If first node is array - must select path "pm.response.json()" without dot at end
+        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
+        // Try to read key if it exist
+        var keyExist = true;
+        try
+        {
+            val = eval(startPath + path);
+    	}
+    	catch(e)
+    	{
+            pm.test("Variable [" + path + "] is undefined", () => {
+                pm.expect(eval(startPath + path)).to.be.exist;
+	        })
+            keyExist = false;
+        }
+        if ( keyExist )
+        {
+     	    val = eval(startPath + path);
+        }
+    }
+    else if ( contentType == "grpc" )
+    {
+        val = eval('pm.response.messages.all()[0].data.' + path)
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
+    switch (space)
+    {
+        case 'collection':
+            pm.collectionVariables.set(varName, val);
+            //console.log("var " + varName + "; val " + val)
+            break;
+        case 'env':
+            pm.environment.set(varName, val);
+            break;
+    }
+}
+
+function getvar(varName, space="collection")
+{
+    ret = "";
+    switch (space.toUpperCase())
+    {
+        case "COLLECTION":
+            ret = pm.collectionVariables.get(varName);
+            break;
+        default:
+            ret = pm.collectionVariables.get(varName);
+    }
+    return ret;
+}
+
+function randomString(length=1) {
+    // length = str length
+    let randomString = "";
+    for (let i = 0; i < length; i++){
+        randomString += pm.variables.replaceIn("{{$randomAlphaNumeric}}");
+    }
+    return randomString;
+}
+
+// Internal functions
+function getContentType()
+{
+    var contentType = (pm.response.headers.has("Content-Type")) ? pm.response.headers.get("Content-Type") : false;
+    //console.log("Responce's Content-Type is [" + contentType + "]");
+    if ( (/^application\/json.*$/.test(contentType)) )
+    {
+        contentType = "json";
+    }
+    else if ( (/^application\/grpc.*$/.test(contentType)) )
+    {
+        contentType = "grpc";
+    }
+    else
+    {
+        console.log("Unsupported Content-Type [" + contentType + "]")
+    }
+    return contentType;
+}
+
+function exist(path, check_var)
+{
+    if (check_var === undefined)
+    {
+        pm.test("Variable [" + path + "] is undefined", () => {
+        response = pm.response.messages.all()[0].data;
+        pm.expect(response).to.have.property(path)
+        })
+        return false
+    }
+    return true
+}
+
+//function show_pass(msg = null, silent = false)
+function show_pass(msg, silent)
+{
+    // TBD. if required to use some code
+    tResult.Result += msg;
+    //return tResult;
+}
+
+function getKeysfromJSONarray(arr)
+{
+    // Transform JSON array from ["key1": "val1, "key2": "val2"] ? ["key1", "key2"] 
+    let ret = [];
+    val.forEach((element) => {
+        var keys = Object.keys(element);
+        var key = keys[0];
+        //console.log(key);
+        ret.push(key)
+    })
+    return ret;
+}
+
+// Absolette functions. For backward compatibility.
+function test_grpc(path, exp, type, silent)
+{
+    test(path, exp, type, silent);
+}
+
+function header(name, exp, type, silent)
+{
+    val = pm.response.headers.get(name)
+    msg = "Header property [" + name + "] has value: "
+    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
+    compare (msg, val, exp, type, silent)
+}
+*/
