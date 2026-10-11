@@ -1,202 +1,292 @@
 // =====================================================================
-// After Response — единый файл для скрипта уровня КОЛЛЕКЦИИ (Post-response)
-// (объединены бывшие common + script: фасад utils сверху, реализация ниже)
+// Before Request - единый файл для скрипта уровня КОЛЛЕКЦИИ (Pre-request)
+// v4: подготовка теста одной строкой на шаг (utils.bind)
 //
-// ПРАВИЛО: код здесь НЕ вызывает pm.test() и console.log() — Postman не
-// показывает их вывод, если они вызваны из подключаемой функции.
-// Каждая функция только считает и ВОЗВРАЩАЕТ объект результата:
-//   { Msg: [], Result: "", Assert: null, Silent: false, Value: undefined, Var: null }
-//     Result - заголовок pm.test
-//     Assert - текст ошибки (null = тест пройден)
-//     Silent - true: показывать тест только при падении
-//     Msg    - строки для console.log (печатает запрос)
-//     Value/Var - для setvar (переменную выставляет запрос)
-// pm.test / console.log / pm.*.set выполняет функция report() внутри запроса
-// (см. After Responce (usage).js).
+// Функции коллекции ничего не пишут в консоль собственным console - вывод
+// не виден. Ошибки настройки - через throw (видно в интерфейсе Postman) или
+// через переменную fw_setup_error: After Response покажет её первым тестом.
+//
+// В запросе:
+//   const { login, account, need } = utils.bind(pm, console);
+//   login("sid");                 // вход учёткой #0, cookie -> {{sid}}
+// Шаги выполняются строго по очереди (асинхронные запросы ждут друг друга).
+// В начале и в конце подготовки cookie jar очищается: запрос получает только
+// те cookie, что явно указаны в его заголовке Cookie.
+// Использование - см. "Before Responce (usage).js".
 // =====================================================================
 
-// Фасад: именно его вызывают скрипты запросов (utils.test(...), utils.check(...) и т.д.)
+// Фасад: именно его вызывают скрипты запросов
 utils = {
-  statusCode:   function (code) { return statusCode(code); },
-  test:         function (path, exp, type, silent) { return test(path, exp, type, silent); },
-  check:        function (parameter, exp, type, silent) { return check(parameter, exp, type, silent); },
-  header:       function (name, exp, type, silent) { return header(name, exp, type, silent); },
-  schema:       function (schemaObj, silent) { return schema(schemaObj, silent); },
-  basictests:   function (code) { return basictests(code); },
-  setvar:       function (varName, path, space) { return setvar(varName, path, space); },
-  getvar:       function (varName, space = "collection") { return getvar(varName, space); },
-  randomString: function (length = 1) { return randomString(length); },
+  bind:                 function (reqPm, reqConsole) { return fwSetupBind(reqPm, reqConsole); },
+  convert:              function (dest, var_space, src_var, target_var) { return convert(dest, var_space, src_var, target_var); },
+  randomVal:            function (type, min = null, max = null, length = 1) { return randomVal(type, min, max, length); },
+  randomString:         function (length = 1) { return randomString(length); },
+  getAdminAccountCreds: function () { return getAdminAccountCreds(); },
+  getAccounts:          function () { return getAccounts(); },
 };
 
-
-// ============== Constants ===============
-var FW_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-var FW_CERT_RE = /^[0-9a-fA-F]{40}$/;
-var FW_DATETIME_FORMATS = {
-  "YYYY-MM-DDThh:mm:ss.tttZ": /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{1,3}Z$/,
-  "YYYY-MM-DDThh:mm:ssZ":     /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/,
-  "YYYY-MM-DD":               /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
-};
+var FW_SESSION_COOKIE = "__Host-sid";
 
 
-// ============== Public API ===============
-
-// Проверка значения в теле ответа по пути (a.b[0].c | [0].a | "" - корень)
-function test(path, exp, type, silent = false)
+// ============== Setup DSL ===============
+function fwSetupBind(reqPm, reqConsole)
 {
-    const r = newResult(silent);
-    const pathF = String(path).replace(".", ": ") + ":";
-    r.Result = (String(type).toUpperCase().substring(0, 5) === "ARRAY")
-        ? "Array [" + pathF + "]"
-        : "Property [" + pathF + "] has value: ";
+    const out = reqConsole || console;
+    const queue = [];
+    let busy = false, failed = false;
 
-    const body = readBody(r);
-    if (!body.ok) return r;
+    // флаги для After Response помечены id запроса: в раннере локальные переменные живут дольше запроса
+    const tag = (text) => (reqPm.info && reqPm.info.requestId ? reqPm.info.requestId : "") + "|" + text;
+    reqPm.variables.set("fw_setup_error", "");
+    reqPm.variables.set("fw_skip_reason", "");
 
-    const g = getByPath(body.data, path);
-    if (!g.found)
+    const base = () => reqPm.variables.replaceIn("{{baseUrl}}");
+    const R = (v) => (typeof v === "string" && v.indexOf("{{") >= 0) ? reqPm.variables.replaceIn(v) : v;
+
+    function failSetup(step, message)
     {
-        if (String(exp) === "KEY_NOT_EXIST")
+        failed = true;
+        queue.length = 0;
+        const text = step + ": " + message;
+        reqPm.variables.set("fw_setup_error", tag(text));
+        out.error("SETUP FAILED - " + text);
+    }
+
+    function pump()
+    {
+        if (busy || failed || !queue.length) return;
+        busy = true;
+        const step = queue.shift();
+        let finished = false;
+        const done = (err) => {
+            if (finished) return;
+            finished = true;
+            busy = false;
+            if (err) failSetup(step.name, err.message || String(err));
+            pump();
+        };
+        try { step.fn(done); }
+        catch (e) { done(e); }
+    }
+
+    function enqueue(name, fn) { queue.push({ name: name, fn: fn }); pump(); }
+
+    function skip(reason)
+    {
+        failed = true;          // остальные шаги подготовки не выполняются
+        queue.length = 0;
+        out.warn("SKIPPED: " + reason);
+        // если Postman не умеет skipRequest (или вызов из callback не сработал),
+        // After Response увидит причину и не будет выполнять проверки
+        reqPm.variables.set("fw_skip_reason", tag(reason));
+        if (reqPm.execution && typeof reqPm.execution.skipRequest === "function") reqPm.execution.skipRequest();
+        else throw new Error("SKIPPED: " + reason);
+    }
+
+    // opts: { method, path, cookie, headers, body, query }
+    function send(o, cb)
+    {
+        const headers = {};
+        Object.keys(o.headers || {}).forEach((k) => { headers[k] = R(o.headers[k]); });
+        const sid = o.as ? reqPm.variables.get(o.as) : R(o.cookie);
+        if (sid) headers.Cookie = FW_SESSION_COOKIE + "=" + sid;
+        let url = base() + R(o.path);
+        if (o.query) url += (url.indexOf("?") < 0 ? "?" : "&") + R(o.query);
+        const req = { url: url, method: o.method || "GET", header: headers };
+        if (o.body !== undefined)
         {
-            r.Result = "Property [" + path + "] does not exist as expected";
-            return r;
+            if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+            req.body = { mode: "raw", raw: (typeof o.body === "string") ? R(o.body) : JSON.stringify(resolveDeep(o.body, R)) };
         }
-        r.Result = "Variable [" + path + "] is undefined";
-        r.Assert = "Please check Response Body";
-        return r;
+        reqPm.sendRequest(req, (err, res) => {
+            let json;
+            try { json = res ? res.json() : undefined; } catch (e) { json = undefined; }
+            cb(err, res, json);
+        });
     }
 
-    compare(r, g.value, exp, type);
-    return r;
-}
-
-// Проверка служебных параметров ответа: statusCode | responseTime | contentLength
-function check(parameter, exp, type, silent = false)
-{
-    const r = newResult(silent);
-    let val;
-    switch (parameter)
+    function clearJar(done)
     {
-        case "statusCode":
-            val = pm.response.code;
-            r.Result = "Status code is ";
-            break;
-        case "responseTime":
-            val = pm.response.responseTime;
-            r.Result = "Response Time is ";
-            break;
-        case "contentLength":
-            val = pm.response.headers.get("Content-Length");
-            r.Result = "Content Length is ";
-            break;
-        default:
-            r.Result = "UNEXPECTED parameter [" + parameter + "]";
-            r.Assert = "Supported: statusCode | responseTime | contentLength";
-            r.Silent = false;
-            return r;
+        try { reqPm.cookies.jar().clear(base(), () => done()); }
+        catch (e) { done(); }   // домен не в allowlist - тест всё равно передаёт cookie явно
     }
-    compare(r, val, exp, type);
-    return r;
-}
 
-// Проверка заголовка ответа
-function header(name, exp, type, silent = false)
-{
-    const r = newResult(silent);
-    const val = pm.response.headers.get(name);
-    if (val === undefined || val === null)
+    function creds(who, prefix)
     {
-        if (String(exp) === "KEY_NOT_EXIST")
-        {
-            r.Result = "Header [" + name + "] does not exist as expected";
-            return r;
-        }
-        r.Result = "Header [" + name + "] is undefined";
-        r.Assert = "Header is missing in response";
-        r.Silent = false;
-        return r;
+        if (failed) return { login: "", password: "" };
+        const acc = pickAccount(who, reqPm.variables.get("current_login"));
+        reqPm.variables.set(prefix + "_login", acc.login);
+        reqPm.variables.set(prefix + "_pass", acc.password);
+        if (acc.role) reqPm.variables.set(prefix + "_role", acc.role);
+        return acc;
     }
-    r.Result = "Header [" + name + "] has value: ";
-    compare(r, val, exp, type);
-    return r;
+
+    const api = {
+        // ---- проверки окружения (синхронно; при невыполнении запрос пропускается)
+        need: function (condition, reason) { if (!condition && !failed) skip(reason); },
+        needAccounts: function (n) {
+            if (failed) return;
+            const list = getAccounts();
+            const distinct = new Set(list.map((a) => a.login)).size;
+            if (distinct < n) skip("needs " + n + " different accounts in env AdminAccounts, configured: " + distinct);
+        },
+        needFlag: function (flag) {
+            if (!failed && String(reqPm.environment.get(flag)) !== "true") skip("env [" + flag + "] is not 'true'");
+        },
+        needEnv: function (name) {
+            if (!failed && !reqPm.environment.get(name)) skip("env [" + name + "] is not set");
+        },
+
+        // ---- переменные (синхронно)
+        set: function (name, value) { reqPm.variables.set(name, R(value)); },
+        account: function (who = "random", prefix = "current") { creds(who, prefix); },
+        longString: function (name, length, ch = "a") { reqPm.variables.set(name, new Array(Number(length) + 1).join(ch)); },
+        email: function (name, length) {
+            // ровно length символов: <local>@example.com
+            const domain = "@example.com", n = Number(length) - domain.length;
+            reqPm.variables.set(name, new Array(n + 1).join("a") + domain);
+        },
+        uuid: function (name) { reqPm.variables.set(name, uuid4()); },
+        now: function (name) { reqPm.variables.set(name, new Date().toISOString()); },
+        random: function (name, length = 12, prefix = "") { reqPm.variables.set(name, prefix + randomString(length)); },
+
+        // ---- шаги с запросами (асинхронно, по очереди)
+        clearCookies: function () { enqueue("clearCookies", clearJar); },
+        wait: function (ms) { enqueue("wait " + ms, (done) => setTimeout(() => done(), Number(ms))); },
+
+        // login("sid", who, {headers}) - вход учёткой who (номер | "random" | "other" | роль),
+        // cookie -> {{sid}}, а также {{sid_userId}}, {{sid_login}}, {{sid_pass}}, {{sid_role}}
+        login: function (varName = "sid", who = 0, opts = {}) {
+            reqPm.variables.set(varName, "");                 // не тащить значение из прошлого запроса
+            const acc = creds(who, varName);
+            enqueue("login " + varName, (done) => {
+                send({ method: "POST", path: "/api/auth/login", headers: opts.headers,
+                       body: { email: acc.login, password: acc.password } }, (err, res, json) => {
+                    if (err) return done(err);
+                    if (res.code !== 200) return done(new Error("POST /api/auth/login as " + acc.login + " returned " + res.code));
+                    const sid = sessionCookieOf(res);
+                    if (!sid) return done(new Error("login returned 200 without Set-Cookie " + FW_SESSION_COOKIE));
+                    reqPm.variables.set(varName, sid);
+                    if (json && json.id) reqPm.variables.set(varName + "_userId", json.id);
+                    if (json && json.role) reqPm.variables.set(varName + "_role", json.role);
+                    done();
+                });
+            });
+        },
+
+        // logout("sid") - закрыть сессию из {{sid}} (значение остаётся в переменной: "отозванная сессия")
+        logout: function (varName = "sid") {
+            enqueue("logout " + varName, (done) => {
+                send({ method: "POST", path: "/api/auth/logout", as: varName }, (err, res) => {
+                    if (err) return done(err);
+                    if (res.code !== 204) return done(new Error("POST /api/auth/logout returned " + res.code));
+                    done();
+                });
+            });
+        },
+
+        // revokedSession("sid_revoked") - вход + выход: значение закрытой сессии
+        revokedSession: function (varName = "sid_revoked", who = 0) {
+            api.login(varName, who);
+            api.logout(varName);
+        },
+
+        // failLogins(5, "{{lock_login}}", { xff: true }) - N неудачных входов подряд
+        failLogins: function (count, email, opts = {}) {
+            for (let i = 0; i < Number(count); i++)
+            {
+                enqueue("failed login #" + (i + 1), (done) => {
+                    const headers = opts.xff ? { "X-Forwarded-For": "10." + rnd(0, 255) + "." + rnd(0, 255) + "." + rnd(1, 254) } : {};
+                    send({ method: "POST", path: "/api/auth/login", headers: headers,
+                           body: { email: R(email), password: "wrong_" + randomString(12) } }, (err) => done(err));
+                });
+            }
+        },
+
+        // call("POST", "/api/auth/logout", { as: "sid", body, headers, expect: 204 }, { var: "x", path: "items[0].id" })
+        call: function (method, path, opts = {}, save) {
+            enqueue(method + " " + path, (done) => {
+                send(Object.assign({ method: method, path: path }, opts), (err, res, json) => {
+                    if (err) return done(err);
+                    if (opts.expect !== undefined && [].concat(opts.expect).indexOf(res.code) < 0)
+                        return done(new Error(method + " " + R(path) + " returned " + res.code + ", expected " + opts.expect));
+                    if (save)
+                    {
+                        const g = getByPath(json, save.path || "");
+                        if (!g.found) return done(new Error(method + " " + R(path) + ": no [" + save.path + "] in response"));
+                        reqPm.variables.set(save.var, typeof g.value === "object" ? JSON.stringify(g.value) : g.value);
+                    }
+                    done();
+                });
+            });
+        },
+
+        // pick("layoutId", "/api/layouts", "id", { status: "draft" }, { as: "sid" })
+        // Берёт поле первого элемента массива (или items[]), подходящего под match.
+        // Значение match "!x" - "не равно x"; "{{var}}" подставляется в момент шага.
+        // Нет подходящего элемента: opts.orSkip !== false -> запрос пропускается.
+        pick: function (varName, path, field, match = {}, opts = {}) {
+            reqPm.variables.set(varName, "");
+            enqueue("pick " + varName, (done) => {
+                send({ method: "GET", path: path, as: opts.as || "sid" }, (err, res, json) => {
+                    if (err) return done(err);
+                    if (res.code !== 200) return done(new Error("GET " + R(path) + " returned " + res.code));
+                    const list = Array.isArray(json) ? json : (json && Array.isArray(json.items) ? json.items : []);
+                    const hit = list.find((el) => Object.keys(match).every((k) => {
+                        const want = String(R(match[k])), v = getByPath(el, k).value;
+                        return want[0] === "!" ? String(v) !== want.substring(1) : String(v) === want;
+                    }));
+                    if (!hit)
+                    {
+                        const why = "no element in GET " + R(path) + " matches " + JSON.stringify(match);
+                        if (opts.orSkip === false) return done(new Error(why));
+                        try { skip(why); } catch (e) { return done(e); }
+                        return done();
+                    }
+                    const g = getByPath(hit, field);
+                    reqPm.variables.set(varName, typeof g.value === "object" ? JSON.stringify(g.value) : g.value);
+                    done();
+                });
+            });
+        },
+    };
+
+    // cookie jar: очистить до шагов и после них (ответы pm.sendRequest могут его наполнить)
+    api.clearCookies();
+    setTimeout(() => { if (!failed) api.clearCookies(); }, 0);
+    return api;
 }
 
-// Статус-код: по умолчанию 200 (REST) или 0 (gRPC). Тихий, виден только при падении.
-function statusCode(code = null)
-{
-    const r = newResult(true);
-    const expected = (code !== null && code !== undefined) ? code : (getContentType() === "grpc" ? 0 : 200);
-    r.Result = "Status code is [" + pm.response.code + "]";
-    if (pm.response.code != expected) r.Assert = "Expected [" + expected + "]";
-    return r;
-}
 
-// Базовые тесты: статус-код + Content-Type. Возвращает МАССИВ результатов.
-function basictests(code = null)
-{
-    const sc = statusCode(code);
-    sc.Silent = false;
-    const ct = newResult(false);
-    ct.Result = "Content-Type is ";
-    compare(ct, pm.response.headers.get("Content-Type"), "/^application\\/(json|grpc)/", "regex");
-    return [sc, ct];
-}
+// ============== Functions ===============
 
-// Валидация тела по JSON Schema (ajv есть в песочнице Postman; nullable из OpenAPI поддержан)
-function schema(schemaObj, silent = false)
+// Кодирует переменную и кладёт результат в целевую; возвращает закодированное значение
+function convert(dest, var_space, src_var, target_var)
 {
-    const r = newResult(silent);
-    r.Result = "Response body matches JSON schema";
-    const body = readBody(r);
-    if (!body.ok) return r;
-    try
+    let src_val;
+    switch (var_space)
     {
-        const Ajv = require("ajv");
-        const ajv = new Ajv({ allErrors: true, nullable: true });
-        const validate = ajv.compile(schemaObj);
-        if (!validate(body.data))
-        {
-            r.Assert = validate.errors
-                .map((e) => (e.dataPath || e.instancePath || "(root)") + " " + e.message)
-                .join("; ");
-        }
+        case "collection": src_val = pm.collectionVariables.get(src_var); break;
+        case "env":        src_val = pm.environment.get(src_var); break;
+        default: throw new Error("convert: unsupported variable space [" + var_space + "]");
     }
-    catch (e)
+    if (src_val === undefined || src_val === null)
+        throw new Error("convert: variable [" + src_var + "] is not set in [" + var_space + "]");
+
+    let encoded;
+    if (String(dest).toLowerCase() === "base64")
     {
-        r.Assert = "Schema validation error: " + e.message;
+        const CryptoJS = require("crypto-js");
+        encoded = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(String(src_val)));
     }
-    return r;
-}
-
-// Читает значение из ответа. Переменную выставляет запрос (setVar в usage), а не библиотека.
-function setvar(varName, path, space = "collection")
-{
-    const r = newResult(true);
-    r.Result = "Variable [" + varName + "] is set from [" + path + "]";
-    r.Var = { name: varName, space: space };
-
-    const body = readBody(r);
-    if (!body.ok) return r;
-
-    const g = getByPath(body.data, path);
-    if (!g.found)
+    else
     {
-        r.Result = "Variable [" + path + "] is undefined";
-        r.Assert = "Cannot set [" + varName + "]: path not found in response";
-        return r;
+        throw new Error("convert: unsupported destination [" + dest + "]");
     }
-    r.Value = g.value;
-    return r;
-}
 
-function getvar(varName, space = "collection")
-{
-    switch (String(space).toUpperCase())
-    {
-        case "ENV":   return pm.environment.get(varName);
-        case "LOCAL": return pm.variables.get(varName);
-        default:      return pm.collectionVariables.get(varName);
-    }
+    if (var_space === "env") pm.environment.set(target_var, encoded);
+    else pm.collectionVariables.set(target_var, encoded);
+    return encoded;
 }
 
 function randomString(length = 1)
@@ -207,185 +297,115 @@ function randomString(length = 1)
     return s;
 }
 
+// Usage: см. "Before Responce (usage).js"
+var FW_RANDOM_TEXT = "Flat Earth is an archaic and scientifically disproven conception of the Earth's shape as a plane or disk. Many ancient cultures subscribed to a flat-Earth cosmography, notably including ancient near eastern cosmology. The model has undergone a recent resurgence as a conspiracy theory. The idea of a spherical Earth appeared in ancient Greek philosophy with Pythagoras (6th century BC). However, most pre-Socratics (6th-5th century BC) retained the flat-Earth model. In the early 4th century BC, Plato wrote about a spherical Earth. By about 330 BC, his former student Aristotle had provided strong empirical evidence for a spherical Earth. Knowledge of the Earth's global shape gradually began to spread beyond the Hellenistic world. By the early period of the Christian Church, the spherical view was widely held, with some notable exceptions. In contrast, ancient Chinese scholars consistently describe the Earth as flat, and this perception remained unchanged until their encounters with Jesuit missionaries in the 17th century.[6] Traditionalist Muslim scholars have maintained that the earth is flat, though, since the 9th century, Muslim scholars tended to believe in a spherical Earth. It is a historical myth that medieval Europeans generally thought the Earth was flat.[9] This myth was created in the 17th century by Protestants to argue against Catholic teachings.[10] More recently, flat earth theory has seen an increase in popularity with modern flat Earth societies, and unaffiliated individuals using social media. Despite the scientific facts and obvious effects of Earth's sphericity, pseudoscientific[13] flat-Earth conspiracy theories persist. In a 2018 study reported on by Scientific American, only 82% of 18 to 24 year old respondents agreed with the statement I have always believed the world is round. However, a firm belief in a flat Earth is rare, with less than 2% acceptance in all age groups.";
 
-// ============== Comparison ===============
-
-function compare(r, val, exp, type)
+function randomVal(type, min = null, max = null, length = 1)
 {
-    const T = String(type).toUpperCase();
-
-    // ---- scalar
-    if (T === "EQL" && val == exp)
-        return pass(r, "[" + show(val) + "] as expected");
-    if (T === "BELOW" && val < exp)
-        return pass(r, "[" + show(val) + "] below than [" + exp + "] as expected");
-    if (T === "ABOVE" && val > exp)
-        return pass(r, "[" + show(val) + "] above than [" + exp + "] as expected");
-
-    if (T === "REGEX")
+    switch (String(type).toUpperCase())
     {
-        try
+        case "INT":
+            return rnd(min === null ? 0 : min, max === null ? 100 : max);
+        case "INN":
+            return rnd(100000000000, 999999999999);
+        case "SNILS_F":
+            return rnd(100, 999) + "-" + rnd(100, 999) + "-" + rnd(100, 999) + " " + rnd(10, 99);
+        case "SNILS":
+            return rnd(10000000000, 99999999999);
+        case "STRING":
+            return randomString(length);
+        case "DATE":
+            return getRandomDateTime(new Date(min), new Date(max)).toISOString().substring(0, 10);
+        case "DATETIME":
+            return getRandomDateTime(new Date(min), new Date(max)).toISOString();
+        case "TEXT":
         {
-            if (toRegExp(exp).test(String(val)))
-                return pass(r, "[" + show(val) + "] by regex [" + exp + "] as expected");
+            const start = rnd(0, Math.max(0, FW_RANDOM_TEXT.length - length));
+            return FW_RANDOM_TEXT.substring(start, start + length);
         }
-        catch (e)
+        case "BOOLEAN":
+            return Math.random() >= 0.5;
+        default:
+            return "NoRandom";
+    }
+}
+
+// internal functions
+function rnd(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+
+function getRandomDateTime(from, to)
+{
+    from = from.getTime();
+    to = to.getTime();
+    return new Date(from + Math.random() * (to - from));
+}
+
+// Список учёток из env AdminAccounts: JSON-массив [{login, password, role?}]
+function getAccounts()
+{
+    const raw = pm.environment.get("AdminAccounts");
+    if (!raw) throw new Error("Environment variable [AdminAccounts] is not set");
+
+    let accounts;
+    try { accounts = JSON.parse(raw); }
+    catch (e) { throw new Error("[AdminAccounts] is not valid JSON: " + e.message); }
+    if (!Array.isArray(accounts) || accounts.length === 0)
+        throw new Error("[AdminAccounts] must be a non-empty array of {login, password}");
+    accounts.forEach((acc) => {
+        if (!acc.login || !acc.password) throw new Error("[AdminAccounts] item must have [login] and [password]");
+    });
+    return accounts;
+}
+
+// Учётка администратора из env AdminAccounts - случайная
+function getAdminAccountCreds()
+{
+    const accounts = getAccounts();
+    const acc = accounts[Math.floor(Math.random() * accounts.length)];
+    return { login: acc.login, password: acc.password };
+}
+
+// who: номер в списке | "random" | "other" (логин не равен current) | роль ("root", "admin")
+function pickAccount(who, currentLogin)
+{
+    const accounts = getAccounts();
+    if (typeof who === "number")
+    {
+        if (!accounts[who]) throw new Error("[AdminAccounts] has no item #" + who);
+        return accounts[who];
+    }
+    switch (String(who))
+    {
+        case "random": return accounts[Math.floor(Math.random() * accounts.length)];
+        case "other":
         {
-            return fail(r, "[" + show(val) + "]", "Invalid regex [" + exp + "]: " + e.message);
+            const acc = accounts.find((a) => a.login !== currentLogin && a.login !== accounts[0].login) ||
+                        accounts.find((a) => a.login !== currentLogin);
+            if (!acc) throw new Error("[AdminAccounts] has no account different from [" + currentLogin + "]");
+            return acc;
         }
-        return fail(r, "[" + show(val) + "]", "Does not match regex [" + exp + "]");
-    }
-
-    // ---- arrays
-    if (T.substring(0, 5) === "ARRAY" || T.slice(-12) === "_COUNT_ARRAY")
-    {
-        if (!Array.isArray(val))
-            return fail(r, " is not an array: [" + show(val) + "]", "Expected array");
-        const len = val.length;
-        const n = parseInt(exp, 10);
-
-        switch (T)
+        default:
         {
-            case "ARRAY_COUNT":
-                return (len === n)
-                    ? pass(r, " count is [" + exp + "] as expected")
-                    : fail(r, " count is [" + len + "]", "Array length is [" + len + "], expected [" + exp + "]");
-
-            case "ARRAY_COUNT_ABOVE":
-            case "ABOVE_COUNT_ARRAY":
-                return (len > n)
-                    ? pass(r, " above than [" + exp + "] as expected")
-                    : fail(r, " count is [" + len + "]", "Array length [" + len + "] is not above [" + exp + "]");
-
-            case "ARRAY_COUNT_BELOW":
-            case "BELOW_COUNT_ARRAY":
-                return (len < n)
-                    ? pass(r, " below than [" + exp + "] as expected")
-                    : fail(r, " count is [" + len + "]", "Array length [" + len + "] is not below [" + exp + "]");
-
-            case "ARRAY":
-            {
-                // exp = ["path.in.element", expectedValue]
-                const idx = val.findIndex((el) => { const g = getByPath(el, exp[0]); return g.found && g.value == exp[1]; });
-                if (idx >= 0)
-                    return pass(r, " has value: [" + exp[1] + "] in property [" + exp[0] + "] as expected");
-                const values = val.map((el) => getByPath(el, exp[0]).value);
-                return fail(r, " has not value in elem [" + exp[0] + "]",
-                    "Expected [" + exp[1] + "], to be one of [" + show(values, 200) + "]");
-            }
-
-            case "ARRAY_COMPARE_KEYSINEXP":
-            case "ARRAY_COMPARE_EXPINKEYS":
-            {
-                if (!Array.isArray(exp)) return fail(r, "", "Expected value must be an array of keys");
-                const respKeys = Array.from(new Set(val.flatMap((el) => (el && typeof el === "object") ? Object.keys(el) : [])));
-                const keysInExp = (T === "ARRAY_COMPARE_KEYSINEXP");
-                const from = keysInExp ? respKeys : exp;
-                const into = keysInExp ? exp : respKeys;
-                const where = keysInExp ? "exp list" : "response";
-                const missing = from.filter((k) => !into.includes(k));
-                return missing.length === 0
-                    ? pass(r, " has keys [" + from.join(", ") + "] in " + where + " as expected")
-                    : fail(r, " keys [" + from.join(", ") + "]", "Keys [" + missing.join(", ") + "] do not exist in " + where);
-            }
-
-            default:
-                return fail(r, "", "Unknown array comparison type [" + type + "]");
+            const acc = accounts.find((a) => a.role === who);
+            if (!acc) throw new Error("[AdminAccounts] has no account with role [" + who + "]");
+            return acc;
         }
     }
-
-    // ---- special expected tokens
-    if (exp === "(RANDOM_GUID)")
-        return FW_GUID_RE.test(String(val))
-            ? pass(r, "(random guid) [" + show(val) + "] as expected")
-            : fail(r, "[" + show(val) + "]", "Expected GUID format");
-
-    if (exp === "(RANDOM_CERT)")
-        return FW_CERT_RE.test(String(val))
-            ? pass(r, "(random certificate) [" + show(val) + "] as expected")
-            : fail(r, "[" + show(val) + "]", "Expected certificate thumbprint (40 hex chars)");
-
-    if (exp === "(RANDOM_PROPERTY)")
-        return pass(r, "[" + show(val) + "] as expected");
-
-    if (exp === "(RANDOM_XML)")
-    {
-        let ok = false;
-        try { require("xml2js").parseString(String(val), (err, res) => { ok = !err && !!res; }); } catch (e) { ok = false; }
-        return ok
-            ? pass(r, "(random XML) [" + show(val) + "] as expected")
-            : fail(r, "(random XML)", "Value is not valid XML");
-    }
-
-    if (T === "DATETIME")
-    {
-        const re = FW_DATETIME_FORMATS[exp];
-        if (!re) return fail(r, "[" + show(val) + "]", "Unsupported datetime format [" + exp + "]. Supported: " + Object.keys(FW_DATETIME_FORMATS).join(" | "));
-        return re.test(String(val))
-            ? pass(r, "[" + show(val) + "] and has format as expected [" + exp + "]")
-            : fail(r, "[" + show(val) + "]", "Expected format [" + exp + "]");
-    }
-
-    if (exp === "NULL")
-        return (val === null)
-            ? pass(r, "[null] as expected")
-            : fail(r, "[" + show(val) + "]", "Expected [null]");
-
-    if (exp === "EMPTY")
-    {
-        const empty = (val === "") || (val !== null && typeof val === "object" && Object.keys(val).length === 0);
-        return empty
-            ? pass(r, "[EMPTY] as expected")
-            : fail(r, "[" + show(val) + "]", "Expected empty value ('', {} or [])");
-    }
-
-    if (exp === "KEY_EXIST")
-        return pass(r, "[" + show(val) + "] it is \"Not Empty or Does Exist\" as expected");
-
-    if (exp === "KEY_NOT_EXIST")
-        return fail(r, "[" + show(val) + "]", "Property must not exist, but it is in the response");
-
-    // ---- mismatch
-    switch (T)
-    {
-        case "ABOVE": return fail(r, "[" + show(val) + "]", "[" + show(val) + "] is not above expected [" + exp + "]");
-        case "BELOW": return fail(r, "[" + show(val) + "]", "[" + show(val) + "] is not below expected [" + exp + "]");
-        default:      return fail(r, "[" + show(val) + "]", "Expected [" + show(exp) + "]");
-    }
 }
 
-
-// ============== Internal helpers ===============
-
-function newResult(silent = false)
+function sessionCookieOf(res)
 {
-    return { Msg: [], Result: "", Assert: null, Silent: Boolean(silent), Value: undefined, Var: null };
+    const h = res && res.headers;
+    const list = h ? (typeof h.all === "function" ? h.all() : (h.members || [])) : [];
+    for (const x of list)
+    {
+        if (String(x.key).toLowerCase() !== "set-cookie") continue;
+        const m = String(x.value).match(new RegExp("^\\s*" + FW_SESSION_COOKIE.replace(/[-]/g, "\\-") + "=([^;]*)"));
+        if (m && m[1] && !/max-age=0/i.test(x.value)) return m[1];
+    }
+    try { return res.cookies.get(FW_SESSION_COOKIE) || null; } catch (e) { return null; }
 }
 
-function pass(r, text) { r.Result += text; r.Assert = null; return r; }
-function fail(r, text, assert) { r.Result += text; r.Assert = assert; return r; }
-
-// Короткое представление значения для заголовка теста
-function show(v, max = 50)
-{
-    let s;
-    if (typeof v === "string") s = v;
-    else { try { s = JSON.stringify(v); } catch (e) { s = String(v); } }
-    s = String(s);
-    return s.length > max ? s.substring(0, max) + "..." : s;
-}
-
-// "/^abc$/i" | "abc" | RegExp -> RegExp
-function toRegExp(exp)
-{
-    if (exp instanceof RegExp) return exp;
-    const s = String(exp);
-    const m = s.match(/^\/([\s\S]*)\/([a-z]*)$/);
-    return m ? new RegExp(m[1], m[2]) : new RegExp(s);
-}
-
-// Безопасный (без eval) доступ по пути: a.b[0].c | [0].a | ["key.with.dot"] | ""
-// found=false, если ключа нет (отличает "нет ключа" от "значение undefined/null")
 function getByPath(obj, path)
 {
     if (path === "" || path === null || path === undefined) return { found: true, value: obj };
@@ -404,567 +424,23 @@ function getByPath(obj, path)
     return { found: true, value: cur };
 }
 
-function getContentType()
+function resolveDeep(v, R)
 {
-    const h = pm.response.headers.get("Content-Type") || "";
-    if (/^application\/([\w.+-]*\+)?json/i.test(h)) return "json";
-    if (/^application\/grpc/i.test(h)) return "grpc";
-    return h || "(none)";
+    if (Array.isArray(v)) return v.map((x) => resolveDeep(x, R));
+    if (v && typeof v === "object") { const o = {}; Object.keys(v).forEach((k) => { o[k] = resolveDeep(v[k], R); }); return o; }
+    return R(v);
 }
 
-// Читает тело ответа. При ошибке заполняет r и возвращает ok=false.
-function readBody(r)
+function uuid4()
 {
-    const ct = getContentType();
-    try
+    const h = "0123456789abcdef";
+    let s = "";
+    for (let i = 0; i < 36; i++)
     {
-        if (ct === "json") return { ok: true, data: pm.response.json() };
-        if (ct === "grpc") return { ok: true, data: pm.response.messages.all()[0].data };
+        if (i === 8 || i === 13 || i === 18 || i === 23) { s += "-"; continue; }
+        if (i === 14) { s += "4"; continue; }
+        const n = Math.floor(Math.random() * 16);
+        s += (i === 19) ? h[(n & 0x3) | 0x8] : h[n];
     }
-    catch (e)
-    {
-        r.Result = "Cannot read response body";
-        r.Assert = e.message;
-        r.Silent = false;
-        return { ok: false };
-    }
-    r.Result = "Unsupported Content-Type [" + ct + "]";
-    r.Assert = "Expect JSON or gRPC";
-    r.Silent = false;
-    return { ok: false };
+    return s;
 }
-
-
-// ============== Obsolete (backward compatibility) ===============
-function test_grpc(path, exp, type, silent)
-{
-    return test(path, exp, type, silent);
-}
-
-
-/*
-utils = {
-  statusCode: function() {
-    return statusCode();
-  },
-  test: function(path, exp, type, silent) {
-   return test(path, exp, type, silent);
-  },
-  check: function(parameter, exp, type, silent) {
-    return check(parameter, exp, type, silent);
-  },
-  setvar: function(varName, path, space) {
-    setvar(varName, path, space);
-  },
-  getvar: function(varName, space="collection") {
-    return getvar(varName, space);
-  },
-  randomString: function(length=1) {
-    return randomString(length)
-  },
-};
-
-
-// ============== Functions ===============
-var tResult = {Msg : [], Result : null, Assert : null, Silent : null };
-// Public
-function test(path, exp, type, silent = false)
-{
-    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
-
-    //let ret = tResult;
-    //ret.Silent = Boolean(silent)
-    tResult.Silent = Boolean(silent)
-    //{Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
-    let val;
-
-    //tResult.Msg.push("TTTTTTTTTTT");
-    //tResult.Msg.push("TTTTTTTTTTT22");
-    //return tResult;
-    //return {Msg : "ffff", Result : "ggggg", Assert : "rrrrr"}
-
-    var pathF = path.replace(".", ": ") + ":";
-    if (type.toUpperCase().substring(0,5) == "ARRAY")
-    {
-        //msg = "Array [" + pathF + "]";
-        tResult.Result = "Array [" + pathF + "]";
-    }
-    else 
-    {
-        //msg = "Property [" + pathF + "] has value: ";
-        tResult.Result = "Property [" + pathF + "] has value: ";
-    }
-    
-    var contentType = getContentType();
-
-    if ( contentType == "json" )
-    {
-    
-        // If first node is array - must select path "pm.response.json()" without dot at end
-        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
-        // Try to read key if it exist
-        var keyExist = true;
-        try
-        {
-            val = eval(startPath + path);
-    	}
-    	catch(e)
-    	{
-            //console.error(e);
-            //console.error(e.message);
-            
-            tResult.Result = "Variable [" + path + "] is undefined";
-            tResult.Assert = "Please check Responce Body"
-
-            keyExist = false;
-        }
-
-        //return {Msg : pm.response.json(), Result : "ggs2sggg", Assert : "rrrrr"}
-
-
-        if ( keyExist )
-        {
-     	    val = eval(startPath + path);
-            
-            compare ("", val, exp, type, silent);
-            
-            //ret = {Msg : "restAAAA", Result : "aaa", Assert : "bbb"};
-        }
-    }
-    else if ( contentType == "grpc" )
-    {
-        val = eval('pm.response.messages.all()[0].data.' + path);
-        if(exist(path, val))
-        {
-            //compare (msg, val, exp, type, silent);
-            compare ("", val, exp, type, silent);
-            //ret = {Msg : "GRPC is not supported", Result : "FFFF", Assert : "XXXX"};
-        }
-    }
-    else
-    {
-        console.log("Unsupported Content-Type [" + contentType + "]");
-        //ret.Msg = "";
-        tResult.Msg.push("Unsupported Content-Type [" + contentType + "]");
-
-    }
-    return tResult;
-}
-
-function compare (msg, val, exp, type, silent = false)
-{
-    
-    let ret = tResult;
-    //console.log("Finction Compare start")
-    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
-    type = type.toUpperCase();
-
-    if ( val == exp && type == "eql".toUpperCase() )
-    {
-        //return tResult;
-        if (val.length > 50) // if val so long
-        {
-            val = val.substr(1,50) + "..."
-        }
-        tResult.Result += '[' + val + '] as expected';
-        show_pass(msg, silent)
-    }
-    else if (val < exp && type == "below".toUpperCase() )
-    {
-        tResult.Result += '[' + val + '] below than [' + exp + '] as expected';
-        show_pass(msg, silent)
-    }
-    else if ( val > exp && type == "above".toUpperCase() )
-    {
-        tResult.Result += '[' + val + '] above than [' + exp + '] as expected';
-        show_pass(msg, silent)
-    }
-    else if ( type == "regex".toUpperCase() && eval(exp + '.test(val)') )
-    {
-        tResult.Result += '[' + val + '] by regex [' + exp + '] as expected';
-        show_pass(msg, silent)
-    }
-    
-    else if ( (type == "below_count_array".toUpperCase() || type == "array_count_below".toUpperCase()) && val.length < parseInt(exp)) 
-    {
-        tResult.Result += ' below than [' + exp + '] as expected';
-        show_pass(msg, silent)
-    }
-    else if ( (type == "above_count_array".toUpperCase() || type == "array_count_above".toUpperCase()) && val.length > parseInt(exp) )
-    {
-        tResult.Result += ' above than [' + exp + '] as expected'
-        show_pass(msg, silent)
-    }															 
-    else if ( (type == "array_count".toUpperCase()) && val.length == parseInt(exp) )
-    {
-        tResult.Result += ' count is [' + exp + '] as expected';
-        show_pass(msg, silent)
-    }															 
-    else if ( type == "array".toUpperCase() )
-    {  
-        valueFound = false
-        val.forEach(function(elem)
-        {
-            expResult = eval('elem["' + exp[0].replaceAll(".", '"]["') + '"]')
-            if ( expResult == exp[1] )
-            {
-                tResult.Result += ' has value: [' + expResult + '] in property [' + exp[0] + '] as expected';
-                show_pass(msg, silent)
-                valueFound = true
-            }
-        });
-        if ( !valueFound )
-            {
-                tResult.Result += ' has not value in elem [' + exp[0] + ']';
-                tResult.Assert = "Expected ["+ exp[1] +"], to be one of ["+ val +"]"
-
-            }
-    }
-    else if ( type == "array_compare_keysInExp".toUpperCase() || type == "array_compare_expInKeys".toUpperCase() )
-    {
-        // Compare arrays: responce keys in array and Expect list
-        if ( type == "array_compare_keysInExp".toUpperCase() )
-        {
-            // Keys in responce array is exist in exp's array
-            var arrayVal = getKeysfromJSONarray(val);
-            var arrayExp = exp;
-            var msgAdd = "exp list"
-
-        }
-        else if (type == "array_compare_expInKeys".toUpperCase())
-        {
-            // Items (keys list) in exp's array is exist in responce array
-            var arrayVal = exp;
-            var arrayExp = getKeysfromJSONarray(val);
-            var msgAdd = "responce"
-        }
-
-        arrayVal.forEach((element) => {
-            if ( arrayExp.includes(element) )
-            {
-                show_pass(msg +  " has key [" + element + "] as expected", silent);
-            }
-            else
-            {
-                pm.test(msg + " key [" + element + "] does not exist in " + msgAdd, () => {
-                    pm.expect(element).to.include(arrayExp)
-                });
-
-            }
-        })
-    }
-    else if ( exp == "(RANDOM_GUID)" && (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(val)) )
-    {
-        tResult.Result += '(random guid) [' + val + '] as expected';
-        show_pass(msg, silent)
-    }
-    else if ( exp == "(RANDOM_XML)" )
-    {
-        var parseString = require('xml2js').parseString;
-        parseString(val, function (err, result) {
-        if (result)
-        {
-            if ( val.length > 50 ) // if val so long
-            {
-                val = val.substr(1,50) + "..."
-            }
-            show_pass(msg + '(random XML) [' + val + '] as expected', silent)
-        }
-        else
-        {
-            pm.test(msg + '(random XML)', () => {
-                pm.expect(val).to.eql("(random XML)")
-            })
-        }
-        });
-    }
-    else if ( exp == "(RANDOM_PROPERTY)" )
-    {
-        if (val.length > 50) // if val so long
-        {
-            val = val.substr(1,50) + "..."
-        }
-        show_pass(msg + ' [' + val + '] as expected', silent)
-    }
-    else if ( exp == "(RANDOM_CERT)" && (/^[0-9a-fA-F]{40}$/.test(val)) )
-    {
-        show_pass(msg + '(random certificate) [' + val + '] as expected', silent)
-    }
-    else if ( type == "datetime".toUpperCase() )
-    {
-        if (( exp == "YYYY-MM-DDThh:mm:ss.tttZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}:[0-5]{1}[0-9]{1}\.[0-9]{1,3}Z$/.test(val))) || ( exp == "YYYY-MM-DDThh:mm:ssZ" && (/^[1-2]{1}[9,0]{1}[0-9]{2}-[0-1]{1}[0-9]{1}-[0-3]{1}[0-9]{1}T[0-2]{1}[0-9]{1}:[0-5]{1}[0-9]{1}Z$/.test(val))))
-        {
-            tResult.Result += '[' + val + '] and has format as expected [' + exp + ']';
-            show_pass(msg, silent)
-        }
-        else
-        {
-            tResult.Result += '[' + val + ']';
-            tResult.Assert = 'Expected format [' + exp + ']';
-
-        }
-    }
-    else if ( exp == "NULL" && val == null)
-    {
-        show_pass(msg + ' [' + val + '] as expected', silent)
-    }
-    else if ( exp == "EMPTY" && Object.keys(val).length == 0)
-    {
-        show_pass(msg + ' [' + 'HAS NO KEYS' + '] as expected', silent)
-    }
-    else if ( exp == "KEY_EXIST" && ( val != undefined || val == null ) )
-    {
-        show_pass(msg + ' [' + val + '] it is "Not Empty or Does Exist" as expected', silent)
-    }
-    else
-    {
-        //console.log("exp: [" + exp + "] val: [" + val + "]; type [" + type + "]")
-        //ret.Result = msg;
-        //ret.Assert = 
-        //pm.test(msg, () => {
-            switch (type)
-            {
-                case "above".toUpperCase():
-                    //pm.expect(parseInt(val)).to.above(parseInt(exp))
-                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
-                    break;
-                case "below".toUpperCase():
-                    //pm.expect(parseInt(val)).to.below(parseInt(exp))
-                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
-                    break;
-                case "above_count_array".toUpperCase():
-                    //pm.expect(parseInt(val.length)).to.above(parseInt(exp))
-                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
-                    break;
-                case "below_count_array".toUpperCase():
-                    //pm.expect(parseInt(val.length)).to.below(parseInt(exp))
-                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
-                    break;										 
-                case "array_count".toUpperCase():
-                    //console.log(val.length)
-                    //pm.expect(parseInt(val.length)).to.equal(parseInt(exp))
-                    ret.Msg.push("Array lenght is [" + val.length + "]");
-                    ret.Assert = "Current Array length [" + val + "] are not equal to expected len ["+ exp + "]";
-                    break;
-                case "array_count_above".toUpperCase():
-                    //pm.expect(parseInt(val.length)).to.above(parseInt(exp))
-                    ret.Assert = "[" + val + "] less than expected val ["+ exp + "]";
-                    break;
-                case "array_count_below".toUpperCase():
-                    //pm.expect(parseInt(val.length)).to.below(parseInt(exp))
-                    ret.Assert = "[" + val + "] more than expected val ["+ exp + "]";
-                    break;										 
-                default:
-                    //pm.expect(exp).to.eql(val)
-                    ret.Result += "["+ val +"]";
-                    ret.Assert = "Expected ["+ exp + "]";
-            }
-        //});
-    }  
-    return ret;
-}
-  
-function check(parameter, exp, type, silent)
-{
-    tResult = {Msg : [], Result : null, Assert : null, Silent : Boolean(silent) };
-    let msg = ''
-
-    switch (parameter)
-    {
-        case "statusCode":
-            val = (pm.response.statusCode === undefined ) ? pm.response.code : pm.response.statusCode;
-            tResult.Result = "Status code is ";
-            //tResult.Msg.push("parameter ["+parameter+"], exp ["+exp+"], type ["+type+"], silent ["+silent+"]");
-            break;
-        case "responseTime":
-            val = pm.response.responseTime
-            //msg = 'Response Time is '
-            tResult.Result = "Response Time is";
-            break;
-        case "contentLength":
-            val = pm.response.headers.get("Content-Length");
-            tResult.Result = "Content Length is ";
-            //msg = 'Content Length is '
-            break;
-        default:
-            //val = "UNEXPECTED";
-            //msg = "UNEXPECTED";
-            tResult.Result = "UNEXPECTED";
-            tResult.Assert = "UNEXPECTED";
-    }
-    compare (msg, val, exp, type, silent)
-    return tResult;
-}
-  
-
-function statusCode(code = null)
-{
-    let contentType = getContentType();
-    //contentType = "jsodn";
-    tResult = {Msg : [], Result : null, Assert : null, Silent : true };
-
-    if ( contentType == "json" )
-    {
-        code = (code != null) ? code : 200;
-        // Status Code
-        tResult.Result = "Status code is [" + pm.response.code + "]";
-        if (pm.response.code != code) {
-            tResult.Assert = "Expected [" + code + "]";
-        }
-    }
- 
-    else if ( contentType == "grpc" )
-    {
-        code = (code != null) ? code : 0;
-        // Status Code
-        tResult.Result = "Status code is [" + pm.response.code + "]";
-        if (pm.response.code != code) {
-            tResult.Assert = "Expected [" + code + "]";
-        }
-    }
-    else
-    {
-        tResult.Assert = 'Expect JSON or gRPC'
-        tResult.Msg.push("Unsupported Content-Type [" + contentType + "] for statusCode() Test");
-        tResult.Silent = false;
-    }
-    return tResult;
-}
-
-
-function setvar(varName, path, space)
-{
-    var contentType = getContentType();
-    if ( contentType == "json" )
-    {
-        // If first node is array - must select path "pm.response.json()" without dot at end
-        startPath = ( path.substring(0, 1) == "[" || path == "" ) ? 'pm.response.json()' : 'pm.response.json().';
-        // Try to read key if it exist
-        var keyExist = true;
-        try
-        {
-            val = eval(startPath + path);
-    	}
-    	catch(e)
-    	{
-            pm.test("Variable [" + path + "] is undefined", () => {
-                pm.expect(eval(startPath + path)).to.be.exist;
-	        })
-            keyExist = false;
-        }
-        if ( keyExist )
-        {
-     	    val = eval(startPath + path);
-        }
-    }
-    else if ( contentType == "grpc" )
-    {
-        val = eval('pm.response.messages.all()[0].data.' + path)
-    }
-    else
-    {
-        console.log("Unsupported Content-Type [" + contentType + "]")
-    }
-    switch (space)
-    {
-        case 'collection':
-            pm.collectionVariables.set(varName, val);
-            //console.log("var " + varName + "; val " + val)
-            break;
-        case 'env':
-            pm.environment.set(varName, val);
-            break;
-    }
-}
-
-function getvar(varName, space="collection")
-{
-    ret = "";
-    switch (space.toUpperCase())
-    {
-        case "COLLECTION":
-            ret = pm.collectionVariables.get(varName);
-            break;
-        default:
-            ret = pm.collectionVariables.get(varName);
-    }
-    return ret;
-}
-
-function randomString(length=1) {
-    // length = str length
-    let randomString = "";
-    for (let i = 0; i < length; i++){
-        randomString += pm.variables.replaceIn("{{$randomAlphaNumeric}}");
-    }
-    return randomString;
-}
-
-// Internal functions
-function getContentType()
-{
-    var contentType = (pm.response.headers.has("Content-Type")) ? pm.response.headers.get("Content-Type") : false;
-    //console.log("Responce's Content-Type is [" + contentType + "]");
-    if ( (/^application\/json.*$/.test(contentType)) )
-    {
-        contentType = "json";
-    }
-    else if ( (/^application\/grpc.*$/.test(contentType)) )
-    {
-        contentType = "grpc";
-    }
-    else
-    {
-        console.log("Unsupported Content-Type [" + contentType + "]")
-    }
-    return contentType;
-}
-
-function exist(path, check_var)
-{
-    if (check_var === undefined)
-    {
-        pm.test("Variable [" + path + "] is undefined", () => {
-        response = pm.response.messages.all()[0].data;
-        pm.expect(response).to.have.property(path)
-        })
-        return false
-    }
-    return true
-}
-
-//function show_pass(msg = null, silent = false)
-function show_pass(msg, silent)
-{
-    // TBD. if required to use some code
-    tResult.Result += msg;
-    //return tResult;
-}
-
-function getKeysfromJSONarray(arr)
-{
-    // Transform JSON array from ["key1": "val1, "key2": "val2"] ? ["key1", "key2"] 
-    let ret = [];
-    val.forEach((element) => {
-        var keys = Object.keys(element);
-        var key = keys[0];
-        //console.log(key);
-        ret.push(key)
-    })
-    return ret;
-}
-
-// Absolette functions. For backward compatibility.
-function test_grpc(path, exp, type, silent)
-{
-    test(path, exp, type, silent);
-}
-
-function header(name, exp, type, silent)
-{
-    val = pm.response.headers.get(name)
-    msg = "Header property [" + name + "] has value: "
-    //console.log("msg[" + msg + "]; val[" + val + "]; exp[" + exp + "]; type[" + type + "]; silent[" + silent + "]")
-    compare (msg, val, exp, type, silent)
-}
-*/
