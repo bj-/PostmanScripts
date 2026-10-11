@@ -191,7 +191,27 @@ function fwSetupBind(reqPm, reqConsole)
             api.logout(varName);
         },
 
-        // failLogins(5, "{{lock_login}}", { xff: true }) - N неудачных входов подряд
+        // derive("sid_bad", "sid", "tamper" | "truncate" | "suffix" | "swapcase") - испорченное значение сессии {{sid}}
+        derive: function (varName, fromVar, how) {
+            reqPm.variables.set(varName, "");
+            enqueue("derive " + varName, (done) => {
+                const v = String(reqPm.variables.get(fromVar) || "");
+                if (!v) return done(new Error("{{" + fromVar + "}} is empty"));
+                let out;
+                switch (String(how))
+                {
+                    case "tamper":   { const i = Math.floor(v.length / 2); out = v.substring(0, i) + (v[i] === "A" ? "B" : "A") + v.substring(i + 1); break; }
+                    case "truncate": out = v.slice(0, -1); break;
+                    case "suffix":   out = v + "x"; break;
+                    case "swapcase": out = v.split("").map((c) => c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()).join(""); break;
+                    default: return done(new Error("derive: unknown mode [" + how + "]"));
+                }
+                reqPm.variables.set(varName, out);
+                done();
+            });
+        },
+
+        // failLogins(5,"{{lock_login}}", { xff: true }) - N неудачных входов подряд
         failLogins: function (count, email, opts = {}) {
             for (let i = 0; i < Number(count); i++)
             {

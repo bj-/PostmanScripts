@@ -402,14 +402,14 @@ function error(code, field)
     if (problems.length) r.Assert = problems.join("; ");
     res.push(r);
 
-    if (field)
-    {
+    // field - имя поля или список: test("error", 400, ["email", "password"])
+    [].concat(field || []).forEach((name) => {
         const f = newResult(false);
-        f.Result = "Error message mentions [" + field + "]";
+        f.Result = "Error message mentions [" + name + "]";
         const text = [].concat(m || []).join(" ");
-        if (text.toLowerCase().indexOf(String(field).toLowerCase()) < 0) f.Assert = "message: " + show(text, 200);
+        if (text.toLowerCase().indexOf(String(name).toLowerCase()) < 0) f.Assert = "message: " + show(text, 200);
         res.push(f);
-    }
+    });
     res.push(noLeak());
     return res;
 }
@@ -947,6 +947,15 @@ function compare(r, val, exp, type)
             const t = typeOf(val);
             return typeMatches(val, exp) ? pass(r, "of type [" + t + "] as expected")
                                          : fail(r, "of type [" + t + "]", "Expected type [" + show(exp) + "]");
+        }
+        case "JSON_EQL":
+        {
+            // глубокое равенство; ожидание - объект или JSON-строка (например, "{{ref_body}}")
+            let want = exp;
+            if (typeof exp === "string") { try { want = JSON.parse(exp); } catch (e) { return fail(r, "", "Expected value is not valid JSON: " + show(exp)); } }
+            const norm = (x) => JSON.stringify(x, (k, v) => (v && typeof v === "object" && !Array.isArray(v)) ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {}) : v);
+            return norm(val) === norm(want) ? pass(r, "[" + show(val) + "] equals expected JSON")
+                                            : fail(r, "[" + show(val, 120) + "]", "Expected JSON " + show(want, 200));
         }
         case "CONTAINS":
         case "NOT_CONTAINS":

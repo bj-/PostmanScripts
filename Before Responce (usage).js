@@ -2,7 +2,7 @@
 // Before Request — использование (v4)
 //
 // Первая строка Pre-request - привязка к фреймворку (берите только нужные шаги):
-const { login, logout, revokedSession, account, need, needAccounts, needFlag, needEnv,
+const { login, logout, revokedSession, derive, account, need, needAccounts, needFlag, needEnv,
         set, random, uuid, now, email, longString, pick, call, failLogins, wait, clearCookies } = utils.bind(pm, console);
 //
 // Шаги выполняются строго по очереди, даже если внутри асинхронные запросы.
@@ -23,6 +23,7 @@ login("sid")                                  // вход учёткой #0: {{s
 login("sid_b", "other", { headers: { "User-Agent": "{{ua}}" } })
 logout("sid")                                 // закрыть сессию {{sid}}
 revokedSession("sid_revoked")                 // вход + выход: значение закрытой сессии
+derive("sid_bad", "sid", "tamper")            // испорченная сессия: tamper | truncate | suffix | swapcase
 
 // ---- Данные
 set("upper_login", pm.variables.get("current_login").toUpperCase())

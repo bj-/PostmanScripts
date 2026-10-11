@@ -40,7 +40,8 @@ test("key", "password", "KEY_NOT_EXIST", "KEY_NOT_EXIST")
 test("key", "total", "number", "type")              // string | number | integer | boolean | object | array | null
 test("key", "", ["id", "email"], "keys_exact")      // также keys_include | keys_exclude
 test("key", "", ["password", "hash"], "deep_keys_exclude")
-test("key", "role", ["root", "admin"], "oneof")     // также not_oneof | not_eql | between [min, max]
+test("key", "", "{{ref_body}}", "json_eql")         // тело целиком равно эталону (объект или JSON-строка)
+test("key", "role", ["root", "admin"], "oneof")    // также not_oneof | not_eql | between [min, max]
 test("key", "name", 3, "min_length")                // также length | max_length
 test("body", "", "EMPTY")                           // 204 без тела
 test("body", "", "{{sid}}", "not_contains")         // сырое тело не содержит строку (также contains | regex | not_regex)
