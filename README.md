@@ -44,7 +44,8 @@ test("session", "{{sid}}", "ALIVE");
 | `sessionIdleTimeoutSec` | тайм-аут бездействия сессии (долгий тест) |
 | `enumTimingToleranceMs` | допуск разницы времени ответа (по умолчанию 150) |
 | `isProduction` | `true` - проверять, что документация API скрыта |
-| `safeFailedLogins` | безопасный лимит неудачных входов подряд на учётку из `AdminAccounts`; по достижении - тихий успешный вход (Login guard). Пусто или 0 - без защиты |
+| `safeFailedLogins` | безопасный лимит неудачных входов подряд на учётку из `AdminAccounts`; по достижении - тихий успешный вход (Login guard). Пусто или 0 - без защиты. **Строго меньше** лимита блокировки стенда (`accountLockoutLimit`) |
+| `accountLockoutLimit`, `accountLockoutSec` | лимит неудачных входов стенда и время блокировки (для людей и `run.py`) |
 | `accountUnlock` | описание пути разблокировки учёток стенда (для людей и `run.py`; фреймворк не использует) |
 | `fw_failed_logins` | служебная: счётчики неудачных входов Login guard (JSON) |
 
