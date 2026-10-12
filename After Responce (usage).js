@@ -28,7 +28,7 @@ test("header", "Access-Control-Allow-Origin", "https://evil.example", "not_eql")
 test("basic", 200)                                  // статус + Content-Type одним вызовом
 
 // ---- Тело ответа. Путь: "key" | "key.subkey" | "key[0].subkey" | "[0].key" | "" (корень)
-test("schema", "LoginResponse")                     // схема из FW_SCHEMAS (контракт bff-admin-api)
+test("schema", "Account")                           // схема из FW_SCHEMAS (контракт admin)
 test("schema", "", { type: "object" })              // или своя схема
 test("key", "email", "{{current_login}}", "eql")
 test("key", "role", "/^(root|admin)$/", "regex")
@@ -47,11 +47,11 @@ test("body", "", "EMPTY")                           // 204 без тела
 test("body", "", "{{sid}}", "not_contains")         // сырое тело не содержит строку (также contains | regex | not_regex)
 
 // ---- Массивы
-test("key", "items", 10, "array_count")             // ровно / array_count_above / array_count_below
-test("key", "items", ["email", "{{sid_login}}"], "array")            // есть элемент с email == ...
-test("key", "items", ["sessionId", "{{sid}}"], "array_none")         // нет элемента с таким значением
+test("key", "sessions", 10, "array_count")             // ровно / array_count_above / array_count_below
+test("key", "sessions", ["email", "{{sid_login}}"], "array")            // есть элемент с email == ...
+test("key", "sessions", ["sessionId", "{{sid}}"], "array_none")         // нет элемента с таким значением
 test("key", "items", ["status", "published", "eql"], "array_each")   // каждый элемент: [путь, ожидание, вид]
-test("key", "items", ["current", true, "email", "{{sid_login}}", "eql"], "array_where")   // элементы с current=true: email == ...
+test("key", "sessions", ["current", true, "email", "{{sid_login}}", "eql"], "array_where")   // элементы с current=true: email == ...
 test("key", "", ["key", "version"], "array_sorted")                  // по возрастанию; { by: ["createdAt"], desc: true }
 test("key", "", "id", "array_unique")
 test("key", "key", ["key1", "key2"], "array_compare_keysInExp")
@@ -67,11 +67,10 @@ test("cookie", "__Host-sid", "{{sid_first}}", "not_eql")   // значение c
 // ---- Асинхронные пробы: дополнительные запросы, результаты появятся отдельными тестами
 test("session", "{{sid}}", "DEAD")                  // GET /api/auth/sessions с cookie: ALIVE=200, DEAD=401
 test("login", ["{{sid_login}}", "{{new_pass}}"], 200)
-test("call", { method: "GET", path: "/api/layouts/{{layoutId}}", cookie: "{{sid}}" }, { status: 200, path: "status", value: "draft" })
+test("call", { method: "GET", path: "/api/documents/{{documentId}}", cookie: "{{sid}}" }, { status: 200, path: "status", value: "draft" })
 test("authMatrix", "no_cookie", 401)                // все 23 защищённые операции (варианты - FW_AUTH_VARIANTS)
 test("pathMatrix", "/api/auth/sessions")            // варианты пути без сессии не дают 2xx
 test("roleMatrix")                                  // env RoleMatrix + роли в AdminAccounts
-test("audit", { layoutId: "{{layoutId}}", action: "publish", actorId: "{{sid_userId}}", since: "{{started}}" }, "EXISTS")
 test("password", "{{sid_login}}", ["{{sid_pass}}", "{{temp_pass}}"], "CHANGED")   // + автоматический возврат пароля
 test("enumTiming", { known: "{{current_login}}", rounds: 5 }, 150)
 test("loginLatency", 20, 2000)                      // p95 логина (NFR-1)

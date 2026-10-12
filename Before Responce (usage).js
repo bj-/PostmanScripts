@@ -34,12 +34,12 @@ email("long_email", 255)                      // email ровно 255 симво
 longString("pw129", 129, "Z")
 
 // ---- Запросы
-pick("layoutId", "/api/layouts", "id", { status: "draft" })               // поле первого подходящего элемента
-pick("lang", "/api/layouts/{{layoutId}}/languages", "lang")              // {{...}} подставляется в момент шага
-pick("otherId", "/api/layouts", "id", { id: "!{{layoutId}}" })           // "!x" - не равно x
-pick("sessionId", "/api/auth/sessions?limit=200", "sessionId", { current: true }, { as: "sid_other" })   // с cookie {{sid_other}}
+pick("documentId", "/api/documents", "id", { status: "draft" })           // поле первого подходящего элемента
+pick("slideId", "/api/stories/{{storyId}}/slides", "id")                 // {{...}} подставляется в момент шага
+pick("otherId", "/api/documents", "id", { id: "!{{documentId}}" })       // "!x" - не равно x
+pick("sessionId", "/api/auth/sessions?size=200", "sessionId", { current: true }, { as: "sid_other" })   // с cookie {{sid_other}}
 call("DELETE", "/api/auth/sessions/{{sessionId}}", { as: "sid", expect: 204 })
-call("POST", "/api/layouts/{{layoutId}}/validate", { as: "sid", expect: 200 }, { var: "valid", path: "ok" })
+call("GET", "/api/stories/{{storyId}}/publish-check", { as: "sid", expect: 200 }, { var: "check", path: "" })
 failLogins(10, "{{lock_login}}", { xff: true })   // N неудачных входов (с ротацией X-Forwarded-For)
 wait(1500)
 

@@ -25,3 +25,4 @@ _Последнее обновление: 2026-10-12_
 | Дата | Кто / машина | Что сделано |
 |---|---|---|
 | 2026-10-12 | Claude | Создан каркас: `CLAUDE.md`, `docs/STATUS.md`, `docs/ideas.md`, `docs/decisions/` |
+| 2026-10-12 | Claude | FW_SCHEMAS/FW_ENDPOINTS приведены к контракту admin 0.0.1 (47 защищённых операций, Account, Sessions{sessions,pagination}); test("session") через GET /api/auth/me; pick берёт первый массив ответа; удалён test("audit") (нет API журнала); восстановление пароля учитывает новую сессию после change-password; синхронизировано в postman/BFF-Admin-Auth |

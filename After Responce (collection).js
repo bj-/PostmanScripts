@@ -56,77 +56,82 @@ var FW_LEAK_RE = /(\bat \S+ \(.*:\d+:\d+\)|node_modules|\/src\/|\.ts:\d+|QueryFa
 // Ключи, которые не должны появляться в ответах (ищутся на любой глубине, без учёта регистра)
 var FW_SECRET_KEYS = ["password", "passwordHash", "hash", "salt", "secret", "token", "sid", "sessionToken", "refreshToken", "currentPassword", "newPassword"];
 
-// Схемы ответов по контракту bff-admin-api (OpenAPI 0.0.1). test("schema", "<Имя>")
+// Схемы ответов по контракту admin (API административной панели, OpenAPI 0.0.1). test("schema", "<Имя>")
 var FW_SCHEMAS = (function () {
-  const str = { type: "string" }, num = { type: "number" }, bool = { type: "boolean" }, obj = { type: "object" };
+  const str = { type: "string" }, num = { type: "number" }, bool = { type: "boolean" };
   const dt = { type: "string", format: "date-time" }, uuid = { type: "string", format: "uuid" };
-  const nstr = { type: "string", nullable: true }, ndt = { type: "string", format: "date-time", nullable: true };
+  const nnum = { type: "number", nullable: true };
   const arr = (items) => ({ type: "array", items: items });
   const o = (props, required) => ({ type: "object", properties: props, required: required || Object.keys(props) });
 
-  const Layout = o({ id: str, key: str, name: str, status: { type: "string", enum: ["draft", "published", "archived"] },
-    version: num, description: nstr, publishedAt: ndt, archivedAt: ndt, updatedAt: dt },
-    ["id", "key", "name", "status", "version", "updatedAt"]);
-  const LayoutNode = o({ id: str, parentId: nstr, slot: str, position: num, componentId: str, componentType: str,
-    componentName: str, data: obj, sourceKey: nstr, sourceQuery: { type: "object", nullable: true }, props: obj },
-    ["id", "slot", "position", "componentId", "componentType", "componentName", "data", "props"]);
-  const LayoutLanguage = o({ id: str, lang: str, isEnabled: bool, updatedAt: dt });
+  const Account = o({ id: uuid, email: str, role: { type: "string", enum: ["root", "admin"] }, createdAt: dt, updatedAt: dt });
   const Session = o({ sessionId: uuid, userId: uuid, email: str, createdAt: dt, renewedAt: dt, ip: str, userAgent: str, current: bool });
+  const Pagination = o({ page: num, size: num, count: num, next: nnum, prev: nnum });
   const ErrorAny = o({ statusCode: num, message: { anyOf: [str, arr(str)] }, error: str }, ["statusCode", "message"]);
 
   return {
-    LoginResponse:  o({ id: uuid, email: str, role: { type: "string", enum: ["root", "admin"] }, createdAt: dt, updatedAt: dt }),
+    Account:        Account,
+    LoginResponse:  Account,          // прежнее имя схемы ответа входа
     Error:          ErrorAny,
     BadRequest:     o({ statusCode: num, message: arr(str), error: str }, ["statusCode", "message"]),
     Session:        Session,
-    Sessions:       o({ items: arr(Session), total: num, page: num, limit: num }),
-    ComponentTypes: arr(o({ id: str, key: str, name: str, dataSchema: obj, slots: arr(obj),
-                      dataSource: { type: "string", enum: ["none", "collection", "single"] },
-                      status: { type: "string", enum: ["active", "deprecated"] } })),
-    Layout:         Layout,
-    Layouts:        arr(Layout),
-    LayoutNodes:    arr(LayoutNode),
-    LayoutLanguage: LayoutLanguage,
-    LayoutLanguages: arr(LayoutLanguage),
-    ComponentTranslation: o({ id: str, componentId: str, lang: str, data: obj, updatedAt: dt }),
-    Validation:     o({ ok: bool, errors: arr(str) }),
-    ContentSources: arr(o({ key: str, name: str, kind: { type: "string", enum: ["collection", "single"] }, itemSchema: obj, isEnabled: bool })),
-    ContentItems:   o({ items: arr(obj), total: num }),
-    AuditEntries:   arr(o({ id: str, actorId: nstr, actorName: nstr,
-                      action: { type: "string", enum: ["create", "update", "delete", "reorder", "publish", "archive", "restore"] },
-                      entityType: { type: "string", enum: ["layout", "component", "translation", "content_item"] },
-                      entityId: str, entityTitle: nstr, layoutId: nstr, sourceKey: nstr, changes: obj, comment: nstr, createdAt: dt },
-                      ["id", "action", "entityType", "entityId", "changes", "createdAt"])),
+    Pagination:     Pagination,
+    Sessions:       o({ sessions: arr(Session), pagination: Pagination }),
   };
 })();
 
-// Все защищённые операции контракта. {uuid} - случайный UUID на каждый вызов:
-// даже при обходе аутентификации матрица ничего реального не изменит.
-// logout стоит последним: при ошибочном приёме сессии он закроет её в конце матрицы.
+// Все защищённые операции контракта admin 0.0.1 (security: Cookie). {uuid} - случайный UUID на каждый вызов,
+// регион zz-zz и язык zz не существуют, тела записей пустые (по контракту - 400): даже при обходе
+// аутентификации матрица ничего реального не изменит. logout стоит последним: при ошибочном приёме
+// сессии он закроет её в конце матрицы.
 var FW_ENDPOINTS = [
-  { op: "AuthController_getSessions",          method: "GET",    path: "/api/auth/sessions" },
-  { op: "AuthController_deleteSession",        method: "DELETE", path: "/api/auth/sessions/{uuid}" },
-  { op: "AuthController_changePassword",       method: "POST",   path: "/api/auth/change-password", body: { currentPassword: "fw-wrong-current", newPassword: "fw-new-password-1" } },
-  { op: "ComponentTypesController_getTypes",   method: "GET",    path: "/api/component-types" },
-  { op: "LayoutsController_getScreens",        method: "GET",    path: "/api/layouts" },
-  { op: "LayoutsController_getCurrentVersions",method: "GET",    path: "/api/layouts/current-versions" },
-  { op: "LayoutsController_getVersions",       method: "GET",    path: "/api/layouts/auth/versions" },
-  { op: "LayoutsController_getScreen",         method: "GET",    path: "/api/layouts/{uuid}" },
-  { op: "LayoutsController_getNodes",          method: "GET",    path: "/api/layouts/{uuid}/nodes" },
-  { op: "LayoutsController_getLanguages",      method: "GET",    path: "/api/layouts/{uuid}/languages" },
-  { op: "LayoutsController_toggleLanguage",    method: "PATCH",  path: "/api/layouts/{uuid}/languages/ru", body: { isEnabled: true } },
-  { op: "LayoutsController_updateComponent",   method: "PATCH",  path: "/api/layouts/{uuid}/components/{uuid}", body: { data: {} } },
-  { op: "LayoutsController_saveTranslation",   method: "PUT",    path: "/api/layouts/{uuid}/components/{uuid}/translations/ru", body: { data: {} } },
-  { op: "LayoutsController_validate",          method: "POST",   path: "/api/layouts/{uuid}/validate" },
-  { op: "LayoutsController_publish",           method: "POST",   path: "/api/layouts/{uuid}/publish" },
-  { op: "LayoutsController_archive",           method: "POST",   path: "/api/layouts/{uuid}/archive" },
-  { op: "ContentController_getSources",        method: "GET",    path: "/api/content/sources" },
-  { op: "ContentController_getItems",          method: "GET",    path: "/api/content/onboarding_stories/items" },
-  { op: "ContentController_createItem",        method: "POST",   path: "/api/content/onboarding_stories/items", body: {} },
-  { op: "ContentController_updateItem",        method: "PATCH",  path: "/api/content/onboarding_stories/items/{uuid}", body: {} },
-  { op: "ContentController_removeItem",        method: "DELETE", path: "/api/content/onboarding_stories/items/{uuid}" },
-  { op: "AuditController_getEntries",          method: "GET",    path: "/api/audit" },
-  { op: "AuthController_logout",               method: "POST",   path: "/api/auth/logout" },
+  { op: "me",                        method: "GET",    path: "/api/auth/me" },
+  { op: "getSessions",               method: "GET",    path: "/api/auth/sessions" },
+  { op: "deleteSession",             method: "DELETE", path: "/api/auth/sessions/{uuid}" },
+  { op: "getDocuments",              method: "GET",    path: "/api/documents" },
+  { op: "createDocument",            method: "POST",   path: "/api/documents", body: {} },
+  { op: "getDocument",               method: "GET",    path: "/api/documents/{uuid}" },
+  { op: "replaceDocument",           method: "PUT",    path: "/api/documents/{uuid}", body: {} },
+  { op: "deleteDocument",            method: "DELETE", path: "/api/documents/{uuid}" },
+  { op: "uploadFile",                method: "PUT",    path: "/api/documents/{uuid}/files/zz", body: {} },
+  { op: "deleteFile",                method: "DELETE", path: "/api/documents/{uuid}/files/zz" },
+  { op: "publishDocument",           method: "POST",   path: "/api/documents/{uuid}/publish" },
+  { op: "archiveDocument",           method: "POST",   path: "/api/documents/{uuid}/archive" },
+  { op: "updateSortOrder",           method: "PUT",    path: "/api/documents/sort-order", body: {} },
+  { op: "getSettings",               method: "GET",    path: "/api/settings" },
+  { op: "getLanguages",              method: "GET",    path: "/api/settings/languages" },
+  { op: "createLanguage",            method: "POST",   path: "/api/settings/languages", body: {} },
+  { op: "getDocumentSettings",       method: "GET",    path: "/api/settings/documents" },
+  { op: "replaceDocumentSettings",   method: "PUT",    path: "/api/settings/documents", body: {} },
+  { op: "getDocumentCategories",     method: "GET",    path: "/api/settings/documents/categories" },
+  { op: "getRegions",                method: "GET",    path: "/api/settings/regions" },
+  { op: "createRegion",              method: "POST",   path: "/api/settings/regions", body: {} },
+  { op: "getRegion",                 method: "GET",    path: "/api/settings/regions/zz-zz" },
+  { op: "replaceRegion",             method: "PUT",    path: "/api/settings/regions/zz-zz", body: {} },
+  { op: "getCollections",            method: "GET",    path: "/api/collections" },
+  { op: "getCollection",             method: "GET",    path: "/api/collections/{uuid}" },
+  { op: "replaceCollectionSettings", method: "PUT",    path: "/api/collections/{uuid}/settings", body: {} },
+  { op: "getCollectionStories",      method: "GET",    path: "/api/collections/{uuid}/stories" },
+  { op: "createStory",               method: "POST",   path: "/api/collections/{uuid}/stories", body: {} },
+  { op: "getStory",                  method: "GET",    path: "/api/stories/{uuid}" },
+  { op: "updateStory",               method: "PATCH",  path: "/api/stories/{uuid}", body: {} },
+  { op: "deleteStory",               method: "DELETE", path: "/api/stories/{uuid}" },
+  { op: "updateStorySortOrder",      method: "PUT",    path: "/api/stories/{uuid}/sort-order", body: {} },
+  { op: "checkStoryPublish",         method: "GET",    path: "/api/stories/{uuid}/publish-check" },
+  { op: "publishStory",              method: "POST",   path: "/api/stories/{uuid}/publish", body: {} },
+  { op: "unpublishStory",            method: "POST",   path: "/api/stories/{uuid}/unpublish" },
+  { op: "uploadStoryMedia",          method: "POST",   path: "/api/stories/{uuid}/media", body: {} },
+  { op: "getStorySlides",            method: "GET",    path: "/api/stories/{uuid}/slides" },
+  { op: "createSlide",               method: "POST",   path: "/api/stories/{uuid}/slides", body: {} },
+  { op: "getSlide",                  method: "GET",    path: "/api/slides/{uuid}" },
+  { op: "replaceSlide",              method: "PUT",    path: "/api/slides/{uuid}", body: {} },
+  { op: "deleteSlide",               method: "DELETE", path: "/api/slides/{uuid}" },
+  { op: "updateSlideSortOrder",      method: "PUT",    path: "/api/slides/{uuid}/sort-order", body: {} },
+  { op: "getUsers",                  method: "GET",    path: "/api/users" },
+  { op: "getUser",                   method: "GET",    path: "/api/users/{uuid}" },
+  { op: "getUserSessions",           method: "GET",    path: "/api/users/{uuid}/sessions" },
+  { op: "changePassword",            method: "POST",   path: "/api/auth/change-password", body: { currentPassword: "fw-wrong-current", newPassword: "fw-new-password-1" } },
+  { op: "logout",                    method: "POST",   path: "/api/auth/logout" },
 ];
 
 // Варианты предъявления сессии для test("authMatrix", <вариант>, 401).
@@ -239,7 +244,6 @@ function runTest(T, path, exp, type, silent, report)
         case "AUTHMATRIX":  asyncAuthMatrix(path, exp === undefined ? 401 : exp, report); return undefined;
         case "PATHMATRIX":  asyncPathMatrix(path, report); return undefined;
         case "ROLEMATRIX":  asyncRoleMatrix(report); return undefined;
-        case "AUDIT":       asyncAudit(path, exp, report); return undefined;
         case "RESTOREPASSWORD": asyncRestorePassword(path, exp, report); return undefined;
         case "PASSWORD":    asyncPassword(path, exp, type, report); return undefined;
         case "ENUMTIMING":  asyncEnumTiming(path, exp, report); return undefined;
@@ -644,17 +648,17 @@ function probeResult(title, ok, assert)
     return { Result: title, Assert: ok ? null : assert, Silent: false, Msg: [] };
 }
 
-// test("session", "{{sid}}", "ALIVE" | "DEAD") - GET /api/auth/sessions с этой cookie
+// test("session", "{{sid}}", "ALIVE" | "DEAD") - GET /api/auth/me с этой cookie
 function asyncSession(sid, state, report)
 {
     const value = resolve(sid);
     const want = String(state || "ALIVE").toUpperCase();
     const title = "Session [" + show(String(value), 12) + "] is " + want;
     if (!value) { report(probeResult(title, false, "Session value is empty: check pre-request setup")); return; }
-    send({ method: "GET", path: "/api/auth/sessions?limit=1", cookie: value }, (err, res) => {
+    send({ method: "GET", path: "/api/auth/me", cookie: value }, (err, res) => {
         if (err || !res) return report(probeResult(title, false, "Request failed: " + (err && err.message)));
         const ok = (want === "ALIVE") ? res.code === 200 : res.code === 401;
-        report(probeResult(title, ok, "GET /api/auth/sessions returned [" + res.code + "], expected [" + (want === "ALIVE" ? 200 : 401) + "]"));
+        report(probeResult(title, ok, "GET /api/auth/me returned [" + res.code + "], expected [" + (want === "ALIVE" ? 200 : 401) + "]"));
     });
 }
 
@@ -751,7 +755,7 @@ function asyncRoleMatrix(report)
     let matrix, accounts;
     try { matrix = JSON.parse(P().environment.get("RoleMatrix") || "null"); accounts = JSON.parse(P().environment.get("AdminAccounts") || "[]"); }
     catch (e) { report(probeResult("roleMatrix config", false, "RoleMatrix/AdminAccounts is not valid JSON: " + e.message)); return; }
-    if (!matrix) { report({ Result: "[TODO] roleMatrix: set env RoleMatrix {\"GET /api/audit\": [\"root\"]} and roles in AdminAccounts", Skip: true, Msg: [] }); return; }
+    if (!matrix) { report({ Result: "[TODO] roleMatrix: set env RoleMatrix {\"GET /api/users\": [\"root\"]} and roles in AdminAccounts", Skip: true, Msg: [] }); return; }
     const roles = Array.from(new Set(accounts.map((a) => a.role).filter(Boolean)));
     roles.forEach((role) => {
         const acc = accounts.find((a) => a.role === role);
@@ -769,26 +773,6 @@ function asyncRoleMatrix(report)
                 });
             });
         });
-    });
-}
-
-// test("audit", { layoutId, action, entityType, entityId, actorId, since, cookie }, "EXISTS" | "NOT_EXISTS")
-function asyncAudit(filter, state, report)
-{
-    const f = resolveDeep(filter);
-    const want = String(state || "EXISTS").toUpperCase();
-    const q = [];
-    if (f.layoutId) q.push("layoutId=" + encodeURIComponent(f.layoutId));
-    q.push("limit=" + (f.limit || 50));
-    const fields = ["action", "entityType", "entityId", "actorId"].filter((k) => f[k] !== undefined && f[k] !== "");
-    const title = "Audit entry " + fields.map((k) => k + "=" + f[k]).join(", ") + (want === "EXISTS" ? " exists" : " does not exist");
-    send({ method: "GET", path: "/api/audit?" + q.join("&"), cookie: f.cookie || "{{sid}}" }, (err, res, json) => {
-        if (err || !res || res.code !== 200 || !Array.isArray(json))
-            return report(probeResult(title, false, "GET /api/audit failed: " + (res && res.code)));
-        const since = f.since ? Date.parse(f.since) - 2000 : 0;   // допуск на рассинхрон часов
-        const hit = json.find((e) => fields.every((k) => String(e[k]) === String(f[k])) && (!since || Date.parse(e.createdAt) >= since));
-        report(probeResult(title, want === "EXISTS" ? !!hit : !hit,
-            want === "EXISTS" ? "Not found among " + json.length + " newest entries" : "Found: " + show(hit, 200)));
     });
 }
 
@@ -846,7 +830,9 @@ function asyncPassword(login, pair, state, report)
                     const ok = r3 && r3.code === 204;
                     if (!ok) C().error("RESTORE FAILED for " + email + ": current password is [" + newPass + "]");
                     report(probeResult("Password of [" + email + "] restored", ok, "change-password returned " + (r3 && r3.code) + ". CURRENT PASSWORD: " + newPass));
-                    send({ method: "POST", path: "/api/auth/logout", cookie: sid2 }, () => {});
+                    // смена пароля закрывает все сессии учётки и выпускает новую - её и закрываем
+                    const sid3 = r3 && (parseSetCookies(headersOf(r3), FW_SESSION_COOKIE).filter((c) => !c.cleared)[0] || {}).value;
+                    send({ method: "POST", path: "/api/auth/logout", cookie: sid3 || sid2 }, () => {});
                 });
             });
         });

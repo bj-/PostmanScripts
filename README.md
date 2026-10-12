@@ -16,7 +16,7 @@ python tools/sync_collection.py ../Postman/postman/collections/BFF-Admin
 // Pre-request
 const { login, pick } = utils.bind(pm, console);
 login("sid");
-pick("layoutId", "/api/layouts", "id", { status: "draft" });
+pick("documentId", "/api/documents", "id", { status: "draft" });
 
 // Post-response
 const { test } = utils.bind(pm, console);

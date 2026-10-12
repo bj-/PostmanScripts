@@ -223,7 +223,7 @@ function fwSetupBind(reqPm, reqConsole)
             }
         },
 
-        // call("POST", "/api/auth/logout", { as: "sid", body, headers, expect: 204 }, { var: "x", path: "items[0].id" })
+        // call("POST", "/api/auth/logout", { as: "sid", body, headers, expect: 204 }, { var: "x", path: "sessions[0].sessionId" })
         call: function (method, path, opts = {}, save) {
             enqueue(method + " " + path, (done) => {
                 send(Object.assign({ method: method, path: path }, opts), (err, res, json) => {
@@ -241,8 +241,8 @@ function fwSetupBind(reqPm, reqConsole)
             });
         },
 
-        // pick("layoutId", "/api/layouts", "id", { status: "draft" }, { as: "sid" })
-        // Берёт поле первого элемента массива (или items[]), подходящего под match.
+        // pick("my_sessionId", "/api/auth/sessions?size=200", "sessionId", { current: true }, { as: "sid" })
+        // Берёт поле первого элемента массива (или первого поля-массива ответа: sessions[], items[]), подходящего под match.
         // Значение match "!x" - "не равно x"; "{{var}}" подставляется в момент шага.
         // Нет подходящего элемента: opts.orSkip !== false -> запрос пропускается.
         pick: function (varName, path, field, match = {}, opts = {}) {
@@ -251,7 +251,8 @@ function fwSetupBind(reqPm, reqConsole)
                 send({ method: "GET", path: path, as: opts.as || "sid" }, (err, res, json) => {
                     if (err) return done(err);
                     if (res.code !== 200) return done(new Error("GET " + R(path) + " returned " + res.code));
-                    const list = Array.isArray(json) ? json : (json && Array.isArray(json.items) ? json.items : []);
+                    const list = Array.isArray(json) ? json
+                               : (json && typeof json === "object" ? (Object.values(json).find((v) => Array.isArray(v)) || []) : []);
                     const hit = list.find((el) => Object.keys(match).every((k) => {
                         const want = String(R(match[k])), v = getByPath(el, k).value;
                         return want[0] === "!" ? String(v) !== want.substring(1) : String(v) === want;
