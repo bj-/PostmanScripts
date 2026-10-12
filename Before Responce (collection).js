@@ -101,7 +101,9 @@ function fwSetupBind(reqPm, reqConsole)
         reqPm.sendRequest(req, (err, res) => {
             let json;
             try { json = res ? res.json() : undefined; } catch (e) { json = undefined; }
-            cb(err, res, json);
+            const attempt = !err && res ? fwLoginAttempt(req.method, req.url, req.body && req.body.raw) : null;
+            if (!attempt) return cb(err, res, json);
+            fwGuardLogin(reqPm, attempt.email, attempt.password, res.code, () => cb(err, res, json));
         });
     }
 
@@ -276,6 +278,56 @@ function fwSetupBind(reqPm, reqConsole)
     api.clearCookies();
     setTimeout(() => { if (!failed) api.clearCookies(); }, 0);
     return api;
+}
+
+
+// ============== Login guard ===============
+// Защита учёток стенда от блокировки (Test-Library/Process/running-tests.md, «Блокировка учёток»):
+// не больше env safeFailedLogins неудачных входов подряд на учётку из AdminAccounts; при достижении лимита -
+// тихий успешный вход (сбрасывает счётчик на сервере). Счётчик - env fw_failed_logins (JSON {login: n}).
+// LockoutAccount не охраняется: её блокируют тесты перебора намеренно. safeFailedLogins пуст или 0 - защиты нет.
+function fwGuardLogin(p, email, password, code, done)
+{
+    const limit = Number(p.environment.get("safeFailedLogins") || 0);
+    let acc = null;
+    try
+    {
+        const lock = JSON.parse(p.environment.get("LockoutAccount") || "null");
+        const e = String(email || "").trim().toLowerCase();
+        if (limit > 0 && e && !(lock && String(lock.login).toLowerCase() === e))
+            acc = (JSON.parse(p.environment.get("AdminAccounts") || "[]") || []).find((a) => String(a.login).toLowerCase() === e) || null;
+    }
+    catch (err) { acc = null; }
+    if (!acc) return done();
+
+    const key = String(acc.login).toLowerCase();
+    let counters;
+    try { counters = JSON.parse(p.environment.get("fw_failed_logins") || "{}"); } catch (err) { counters = {}; }
+    const save = () => p.environment.set("fw_failed_logins", JSON.stringify(counters));
+
+    if (code >= 200 && code < 300) { counters[key] = 0; save(); return done(); }
+    counters[key] = (counters[key] || 0) + 1;
+    if (counters[key] < limit) { save(); return done(); }
+
+    // лимит достигнут - успешный вход настоящими кредами
+    p.sendRequest({ url: p.variables.replaceIn("{{baseUrl}}") + "/api/auth/login", method: "POST",
+                    header: { "Content-Type": "application/json" },
+                    body: { mode: "raw", raw: JSON.stringify({ email: acc.login, password: acc.password }) } }, (err, res) => {
+        if (!err && res && res.code >= 200 && res.code < 300) counters[key] = 0;
+        save();
+        done();
+    });
+}
+
+// Запрос - вход? Вернуть {email, password} из тела или null
+function fwLoginAttempt(method, url, rawBody)
+{
+    if (String(method || "").toUpperCase() !== "POST") return null;
+    if (!/\/api\/auth\/login\/?(\?|$)/i.test(String(url || ""))) return null;
+    let body;
+    try { body = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody; } catch (e) { return null; }
+    if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+    return { email: body.email, password: body.password };
 }
 
 
