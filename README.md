@@ -48,6 +48,16 @@ test("session", "{{sid}}", "ALIVE");
 Домен `baseUrl` нужно добавить в allowlist cookie jar (Cookies -> Domains Allowlist): тесты очищают jar,
 чтобы запрос передавал только cookie из своего заголовка.
 
+## Запуск без Postman (newman)
+
+Фреймворк работает в newman без изменений (проверено 2026-10-12, newman 6.2.3): глобальный `utils` из скрипта
+коллекции, `require("ajv" | "crypto-js" | "xml2js")`, `pm.sendRequest`, `pm.cookies.jar()` (allowlist доменов
+в newman не нужен), `pm.execution.skipRequest`. Коллекции в формате YAML v3 перед запуском конвертируются в JSON v2.1 -
+`postman/tools/run/` (там же драйвер newman и отчёт). Порядок запуска - `Test-Library/Process/running-tests.md`.
+
+Ограничение: `test("session", ..., "ALIVE" | "DEAD")` проверяет сессию через `GET /api/auth/me`; если на стенде
+этой ручки нет (старая версия), проверка падает во всех тестах, которые её используют.
+
 ## gRPC
 Becouse grpc methods doesn't support common code - js code should be placed in each request : (
 
