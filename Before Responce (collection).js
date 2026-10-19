@@ -193,7 +193,8 @@ function fwSetupBind(reqPm, reqConsole)
             api.logout(varName);
         },
 
-        // derive("sid_bad", "sid", "tamper" | "truncate" | "suffix" | "swapcase") - испорченное значение сессии {{sid}}
+        // derive("sid_bad", "sid", "tamper" | "truncate" | "suffix" | "swapcase" | "upper" | "id" | "sig" | "graft:<var>") -
+        // значение, производное от {{sid}} (вычисляется в момент шага, после асинхронного входа)
         derive: function (varName, fromVar, how) {
             reqPm.variables.set(varName, "");
             enqueue("derive " + varName, (done) => {
@@ -206,7 +207,17 @@ function fwSetupBind(reqPm, reqConsole)
                     case "truncate": out = v.slice(0, -1); break;
                     case "suffix":   out = v + "x"; break;
                     case "swapcase": out = v.split("").map((c) => c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()).join(""); break;
-                    default: return done(new Error("derive: unknown mode [" + how + "]"));
+                    case "upper":    out = v.toUpperCase(); break;
+                    case "id":       out = v.split(".")[0]; break;                 // идентификатор подписанной cookie (до точки)
+                    case "sig":      out = v.split(".").slice(1).join("."); break; // подпись cookie (после точки)
+                    default:
+                        if (String(how).indexOf("graft:") === 0)                   // идентификатор из fromVar + подпись из другой переменной
+                        {
+                            const other = String(reqPm.variables.get(String(how).substring(6)) || "");
+                            out = v.split(".")[0] + "." + other.split(".").slice(1).join(".");
+                            break;
+                        }
+                        return done(new Error("derive: unknown mode [" + how + "]"));
                 }
                 reqPm.variables.set(varName, out);
                 done();

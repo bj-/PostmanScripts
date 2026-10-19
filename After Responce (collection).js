@@ -248,9 +248,11 @@ function runTest(T, path, exp, type, silent, report)
         case "PASSWORD":    asyncPassword(path, exp, type, report); return undefined;
         case "ENUMTIMING":  asyncEnumTiming(path, exp, report); return undefined;
         case "LOGINLATENCY":asyncLoginLatency(path, exp, report); return undefined;
+        case "PARALLEL":    asyncParallel(path, exp, report); return undefined;
+        case "CLOSESESSIONS": asyncCloseSessions(path, report); return undefined;
         default:
             return { Result: "Unknown test type [" + T + "]", Silent: false, Msg: [],
-                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY" };
+                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY | PARALLEL | CLOSESESSIONS" };
     }
 }
 
@@ -480,6 +482,16 @@ function cookie(name, exp, type, silent = false)
             case "CLEARED":    return cleared.length ? pass(r, "is cleared (Max-Age=0 / Expires in the past) as expected") : fail(r, "is not cleared", "Expected Set-Cookie " + name + " with Max-Age=0 or Expires in the past");
             default:           return fail(r, "", "Unknown cookie state [" + exp + "]. Use ISSUED | NOT_ISSUED | CLEARED");
         }
+    }
+    // атрибуты стирающей cookie: test("cookie", "__Host-sid", ["Secure", "Path=/"], "cleared_attrs") | "cleared_no_attrs"
+    if (T === "CLEARED_ATTRS" || T === "CLEARED_NO_ATTRS")
+    {
+        const d = cleared[0];
+        if (!d) return fail(r, "is not cleared", "Cannot check [" + T + "]: no clearing Set-Cookie " + name);
+        const want = T === "CLEARED_ATTRS";
+        const bad = [].concat(exp).filter((a) => hasAttr(d, a) !== want);
+        return bad.length ? fail(r, "clearing attributes", (want ? "Missing [" : "Must not have [") + bad.join(", ") + "] in [" + show(d.raw, 160) + "]")
+                          : pass(r, "clearing cookie " + (want ? "has" : "has no") + " [" + [].concat(exp).join(", ") + "] as expected");
     }
     const c = live[0];
     if (!c) return fail(r, "is not issued", "Cannot check [" + T + "]: Set-Cookie " + name + " is absent");
@@ -876,6 +888,90 @@ function asyncEnumTiming(opts, toleranceMs, report)
         });
     };
     next();
+}
+
+// test("parallel", { method, path, body, cookie, headers, count: 10 }, { status: [200, 401], distinct: "cookie:__Host-sid", path: "id", value: "{{x}}" })
+// count одинаковых запросов разом (без ожидания ответов друг друга): каждый ответ - из списка status, ни одного 5xx
+// и обрыва; distinct - путь в теле, header:<имя> или cookie:<имя>, значения которого должны различаться (например, новые сессии);
+// path + value - поле каждого ответа 2xx равно value (ответ не перепутан с чужим запросом)
+function asyncParallel(opts, exp, report)
+{
+    const o = resolveDeep(opts);
+    const n = Number(o.count) || 10;
+    const want = (exp && typeof exp === "object" && !Array.isArray(exp)) ? exp : { status: exp };
+    const allowed = [].concat(want.status === undefined ? [200] : want.status).map(Number);
+    const title = "[" + n + " x parallel " + (o.method || "GET") + " " + (o.path || o.url) + "] ";
+    const codes = [], values = [], fields = [];
+    let done = 0;
+    for (let i = 0; i < n; i++)
+    {
+        send(o, (err, res, json) => {
+            codes.push(err || !res ? "ERR" : res.code);
+            if (want.path !== undefined) fields.push(res && res.code < 300 ? getByPath(json, want.path).value : null);
+            if (want.distinct && res)
+            {
+                const d = String(want.distinct);
+                values.push(d.indexOf("cookie:") === 0 ? ((parseSetCookies(headersOf(res), d.substring(7)).filter((c) => !c.cleared)[0] || {}).value || "")
+                          : d.indexOf("header:") === 0 ? String(res.headers.get(d.substring(7)) || "")
+                          : JSON.stringify(getByPath(json, d).value));
+            }
+            if (++done < n) return;
+            const bad = codes.filter((c) => allowed.indexOf(c) < 0);
+            const wrong = fields.filter((v) => v !== null && String(v) !== String(resolve(want.value)));
+            const out = [probeResult(title + "statuses " + JSON.stringify(allowed), bad.length === 0,
+                "Unexpected: " + JSON.stringify(codes) + (bad.some((c) => c === "ERR" || c >= 500) ? " - SERVER ERROR / DROPPED" : ""))];
+            if (want.path !== undefined)
+                out.push(probeResult(title + "[" + want.path + "] = [" + show(resolve(want.value)) + "] in every 2xx response", wrong.length === 0,
+                    "Foreign/unexpected values: " + JSON.stringify(wrong.slice(0, 5)) + " - CONTEXT MIX-UP"));
+            if (want.distinct)
+            {
+                const uniq = values.filter((v, k) => v && values.indexOf(v) === k);
+                out.push(probeResult(title + "[" + want.distinct + "] values are distinct", uniq.length === values.filter((v) => v).length,
+                    "Duplicates among " + values.length + " responses"));
+            }
+            // after: { session: "{{sid}}", state: "DEAD" } - состояние сессии после того, как завершились все параллельные запросы
+            if (want.after && want.after.session)
+            {
+                const sid = resolve(want.after.session), st = String(want.after.state || "DEAD").toUpperCase();
+                return send({ method: "GET", path: "/api/auth/me", cookie: sid }, (e3, r3) => {
+                    out.push(probeResult(title + "then session is " + st, r3 && (st === "ALIVE" ? r3.code === 200 : r3.code === 401),
+                        "GET /api/auth/me returned [" + (r3 && r3.code) + "]"));
+                    report(out);
+                });
+            }
+            report(out);
+        });
+    }
+}
+
+// test("closeSessions", { as: "{{sid}}", emails: ["at-admin@example.com"], userAgent: "/PostmanRuntime/" })
+// Уборка: от имени сессии as (роль root видит все сессии) закрывает открытые сессии учёток emails, кроме сессии as;
+// с userAgent - только сессии с подходящим User-Agent (не трогать сессии людей на общем стенде).
+function asyncCloseSessions(opts, report)
+{
+    const o = resolveDeep(opts);
+    const ua = o.userAgent ? new RegExp(String(o.userAgent).replace(/^\/|\/[a-z]*$/g, "")) : null;
+    const emails = [].concat(o.emails || []);
+    const closed = [], failed = [];
+    const nextEmail = () => {
+        const email = emails.shift();
+        if (email === undefined)
+            return report(probeResult("Cleanup: closed " + closed.length + " session(s) of test accounts", failed.length === 0,
+                "Not closed: " + failed.join(", ")));
+        send({ method: "GET", path: "/api/auth/sessions?size=200&email=" + encodeURIComponent(email), cookie: o.as }, (err, res, json) => {
+            const list = ((json && json.sessions) || []).filter((x) => !x.current && (!ua || ua.test(String(x.userAgent || ""))));
+            const nextSession = () => {
+                const x = list.shift();
+                if (!x) return nextEmail();
+                send({ method: "DELETE", path: "/api/auth/sessions/" + x.sessionId, cookie: o.as }, (e2, r2) => {
+                    (r2 && (r2.code === 204 || r2.code === 404) ? closed : failed).push(x.sessionId);
+                    nextSession();
+                });
+            };
+            nextSession();
+        });
+    };
+    nextEmail();
 }
 
 // test("loginLatency", 20, 2000) - p95 времени логина из N попыток меньше порога (NFR-1);

@@ -63,6 +63,8 @@ test("cookie", "__Host-sid", ["HttpOnly", "Secure", "Path=/", "SameSite=Lax|Stri
 test("cookie", "__Host-sid", ["Domain"], "no_attrs")
 test("cookie", "__Host-sid", 86401, "max_age_below")
 test("cookie", "__Host-sid", "{{sid_first}}", "not_eql")   // значение cookie: любые виды сравнения
+test("cookie", "__Host-sid", ["Secure", "Path=/"], "cleared_attrs")   // атрибуты стирающей cookie (для __Host- обязательны)
+test("cookie", "__Host-sid", ["Domain"], "cleared_no_attrs")
 
 // ---- Асинхронные пробы: дополнительные запросы, результаты появятся отдельными тестами
 test("session", "{{sid}}", "DEAD")                  // GET /api/auth/sessions с cookie: ALIVE=200, DEAD=401
@@ -74,6 +76,10 @@ test("roleMatrix")                                  // env RoleMatrix + роли
 test("password", "{{sid_login}}", ["{{sid_pass}}", "{{temp_pass}}"], "CHANGED")   // + автоматический возврат пароля
 test("enumTiming", { known: "{{current_login}}", rounds: 5 }, 150)
 test("loginLatency", 20, 2000)                      // p95 логина (NFR-1)
+test("parallel", { method: "GET", path: "/api/auth/me", cookie: "{{sid}}", count: 10 }, { status: [200] })   // гонки: N запросов разом, без 5xx
+test("parallel", { method: "POST", path: "/api/auth/login", body: { email: "{{current_login}}", password: "{{current_pass}}" }, count: 5 },
+     { status: [200], distinct: "cookie:__Host-sid" })     // ... и значения поля/заголовка различаются
+test("closeSessions", { as: "{{sid}}", emails: ["at-admin@example.com"], userAgent: "/PostmanRuntime/" })   // уборка сессий тестовых учёток
 test("todo", "FR-35.2 admin accounts", "not in contract")   // пропущенный (skipped) тест-напоминание
 
 // ---- Переменные: значение берётся из ответа. Пространство: collection (по умолчанию) | env | local
