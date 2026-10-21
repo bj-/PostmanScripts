@@ -48,6 +48,7 @@ test("session", "{{sid}}", "ALIVE");
 | `accountLockoutLimit`, `accountLockoutSec` | лимит неудачных входов стенда и время блокировки (для людей и `run.py`) |
 | `accountUnlock` | описание пути разблокировки учёток стенда (для людей и `run.py`; фреймворк не использует) |
 | `fw_failed_logins` | служебная: счётчики неудачных входов Login guard (JSON) |
+| `TD-<КЛАСС>-NNNN`, `TDS-...` | тестовые значения по ссылке (Test-Library ADR 0009): в запросе `{{TD-SQLI-0001}}`, значения - окружение test-data (Postman - импорт `Test-Library/Api/test-data/build/test-data.postman_environment.json`, newman - подставляет движок). Ссылка без значения - запрос не отправляется, в консоли `TEST DATA MISSING` |
 
 Домен `baseUrl` нужно добавить в allowlist cookie jar (Cookies -> Domains Allowlist): тесты очищают jar,
 чтобы запрос передавал только cookie из своего заголовка.

@@ -528,3 +528,20 @@ function uuid4()
     }
     return s;
 }
+
+
+// ============== Тестовые значения по ссылке ===============
+// Test-Library ADR 0009: в запросе - {{TD-SQLI-0001}} (значение) или {{TDS-...}} (набор, JSON-список ID); значения
+// приходят из окружения test-data (Postman - импорт файла, newman/autotest.py - движок). Ссылки без значения -
+// запрос не отправляется: иначе на стенд ушёл бы текст ссылки, а проверка «прошла» бы на нём.
+(function fwTestDataGuard()
+{
+    let raw = "";
+    try { raw = JSON.stringify(pm.request.toJSON()); } catch (e) { return; }
+    const refs = raw.match(/\{\{TDS?-[A-Z0-9-]+\}\}/g) || [];
+    const missing = refs.filter((m, i) => refs.indexOf(m) === i && pm.variables.replaceIn(m) === m);
+    if (!missing.length) return;
+    console.error("TEST DATA MISSING - " + missing.join(", ") + ": импортируйте окружение test-data (Test-Library ADR 0009)");
+    pm.variables.set("fw_skip_reason", (pm.info && pm.info.requestId ? pm.info.requestId : "") + "|нет тестовых значений " + missing.join(", "));
+    if (pm.execution && typeof pm.execution.skipRequest === "function") pm.execution.skipRequest();
+})();
