@@ -92,3 +92,7 @@ setVar("reqId", "header:X-Request-Id", "local")
 
 // ---- Совместимость с v3: старый обязательный блок function test(...) { utils.check / utils.test ... }
 //      в запросах продолжает работать - utils.check/test/header/schema/basictests/setvar не менялись.
+
+// Тестовые значения по ссылке (Test-Library ADR 0009): значения {{TD-...}} запроса не исполнены -
+// в ответе нет их признаков detect (env td_detect); у значений без detect - пропуск
+test("notExecuted")

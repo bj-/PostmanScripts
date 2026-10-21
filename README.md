@@ -49,6 +49,8 @@ test("session", "{{sid}}", "ALIVE");
 | `accountUnlock` | описание пути разблокировки учёток стенда (для людей и `run.py`; фреймворк не использует) |
 | `fw_failed_logins` | служебная: счётчики неудачных входов Login guard (JSON) |
 | `TD-<КЛАСС>-NNNN`, `TDS-...` | тестовые значения по ссылке (Test-Library ADR 0009): в запросе `{{TD-SQLI-0001}}`, значения - окружение test-data (Postman - импорт `Test-Library/Api/test-data/build/test-data.postman_environment.json`, newman - подставляет движок). Ссылка без значения - запрос не отправляется, в консоли `TEST DATA MISSING` |
+| `td_detect` | JSON `{ID: regexp}` - признаки срабатывания тестовых значений для `test("notExecuted")` (из того же окружения test-data / движка) |
+| `fw_td_used` | служебная: какие значения `{{TD-...}}` ушли в запрос (для `test("notExecuted")`) |
 
 Домен `baseUrl` нужно добавить в allowlist cookie jar (Cookies -> Domains Allowlist): тесты очищают jar,
 чтобы запрос передавал только cookie из своего заголовка.

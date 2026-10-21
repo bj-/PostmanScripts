@@ -539,6 +539,9 @@ function uuid4()
     let raw = "";
     try { raw = JSON.stringify(pm.request.toJSON()); } catch (e) { return; }
     const refs = raw.match(/\{\{TDS?-[A-Z0-9-]+\}\}/g) || [];
+    // какие значения ушли в запрос - для test("notExecuted") (признаки detect, ADR 0009)
+    pm.variables.set("fw_td_used", JSON.stringify({ id: pm.info && pm.info.requestId ? pm.info.requestId : "",
+        refs: refs.filter((m, i) => refs.indexOf(m) === i).map((m) => m.slice(2, -2)) }));
     const missing = refs.filter((m, i) => refs.indexOf(m) === i && pm.variables.replaceIn(m) === m);
     if (!missing.length) return;
     console.error("TEST DATA MISSING - " + missing.join(", ") + ": импортируйте окружение test-data (Test-Library ADR 0009)");

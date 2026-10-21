@@ -236,6 +236,7 @@ function runTest(T, path, exp, type, silent, report)
         case "BODY":    return body(exp, type, silent);
         case "ERROR":   return error(path, exp);
         case "NOLEAK":  return noLeak(path);
+        case "NOTEXECUTED": return notExecuted();
         case "TODO":    return { Result: "[TODO] " + path + (exp ? " - " + exp : ""), Assert: null, Skip: true, Msg: [] };
         // ---- асинхронные пробы (дополнительные запросы через pm.sendRequest запроса)
         case "SESSION":     asyncSession(path, exp, report); return undefined;
@@ -440,6 +441,36 @@ function noLeak(extraKeys)
         catch (e) { /* не JSON - ключи не ищем */ }
     }
     if (problems.length) r.Assert = problems.join("; ");
+    return r;
+}
+
+// test("notExecuted") - тестовые значения запроса {{TD-...}} (Test-Library ADR 0009) не исполнены: в ответе нет их
+// признаков detect (env td_detect: {ID: regexp}). Признак не совпадает с самим значением - отражение не в счёт (test_data.py check).
+function notExecuted()
+{
+    const r = newResult(false);
+    r.Result = "Test data is not executed";
+    let used = [], detect = {};
+    try
+    {
+        const u = JSON.parse(P().variables.get("fw_td_used") || "{}");
+        if (!u.id || !P().info || !P().info.requestId || u.id === P().info.requestId) used = u.refs || [];
+    }
+    catch (e) { used = []; }
+    try { detect = JSON.parse(P().variables.get("td_detect") || "{}"); } catch (e) { detect = {}; }
+    const ids = [];
+    used.forEach((ref) => {
+        if (ref.indexOf("TDS-") !== 0) { ids.push(ref); return; }
+        try { JSON.parse(P().variables.get(ref) || "[]").forEach((i) => ids.push(i)); } catch (e) { /* набор без значения */ }
+    });
+    const checked = ids.filter((i) => detect[i]);
+    if (!checked.length)
+        return { Result: "[SKIP] notExecuted - no detect markers for " + (used.join(", ") || "this request"), Assert: null, Skip: true, Msg: [] };
+    let text = "";
+    try { text = P().response.text() || ""; } catch (e) { text = ""; }
+    const hit = checked.filter((i) => { try { return new RegExp(detect[i]).test(text); } catch (e) { return false; } });
+    r.Result += " (" + checked.join(", ") + ")";
+    if (hit.length) r.Assert = "detect marker found in response: " + hit.join(", ");
     return r;
 }
 
