@@ -3,7 +3,7 @@
 //
 // Первая строка Pre-request - привязка к фреймворку (берите только нужные шаги):
 const { login, logout, revokedSession, derive, account, need, needAccounts, needFlag, needEnv,
-        set, random, uuid, now, email, longString, pick, call, failLogins, wait, clearCookies } = utils.bind(pm, console);
+        set, random, uuid, now, email, longString, jwt, pick, call, failLogins, wait, clearCookies } = utils.bind(pm, console);
 //
 // Шаги выполняются строго по очереди, даже если внутри асинхронные запросы.
 // cookie jar очищается до и после подготовки: запрос несёт только cookie из своего заголовка
@@ -28,6 +28,10 @@ derive("sid_bad", "sid", "tamper")            // испорченная сесс
 // ---- Данные
 set("upper_login", pm.variables.get("current_login").toUpperCase())
 random("garbage", 43)                         // случайная строка; random("temp_pass", 12, "Fw-") - с префиксом
+jwt("tok_none", "{{accessToken}}", "none")     // испорченный JWT без ключа подписи: alg=none и пустая подпись
+jwt("tok_badsig", "{{accessToken}}", "badsig") // изменена подпись
+jwt("tok_sub", "{{accessToken}}", "claims", { sub: "00000000-0000-4000-8000-000000000000" })   // подмена claim, подпись прежняя
+jwt("tok_kid", "{{accessToken}}", "header", { kid: "../../dev/null" })                          // подмена поля заголовка
 uuid("random_uuid")
 now("started")                                // ISO-время начала (для проверки аудита)
 email("long_email", 255)                      // email ровно 255 символов

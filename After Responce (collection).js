@@ -236,6 +236,7 @@ function runTest(T, path, exp, type, silent, report)
         case "BODY":    return body(exp, type, silent);
         case "ERROR":   return error(path, exp);
         case "NOLEAK":  return noLeak(path);
+        case "JWT":     return jwtCheck(path, exp, silent);
         case "NOTEXECUTED": return notExecuted();
         case "TODO":    return { Result: "[TODO] " + path + (exp ? " - " + exp : ""), Assert: null, Skip: true, Msg: [] };
         // ---- асинхронные пробы (дополнительные запросы через pm.sendRequest запроса)
@@ -253,7 +254,7 @@ function runTest(T, path, exp, type, silent, report)
         case "CLOSESESSIONS": asyncCloseSessions(path, report); return undefined;
         default:
             return { Result: "Unknown test type [" + T + "]", Silent: false, Msg: [],
-                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY | PARALLEL | CLOSESESSIONS" };
+                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | JWT | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY | PARALLEL | CLOSESESSIONS" };
     }
 }
 
@@ -444,6 +445,49 @@ function noLeak(extraKeys)
     return r;
 }
 
+// test("jwt", "accessToken", { "header.alg": "HS256", "claims.type": "access", "claims.sid": "KEY_EXIST", ttl: [60, 3600] })
+// JWT в теле по пути разбирается без проверки подписи: { header, claims, ttl: exp - iat }. Ожидание по каждому ключу:
+// значение (==) | "/regex/" | "!значение" (не равно) | "KEY_EXIST" | "KEY_NOT_EXIST" | [min, max] (число в диапазоне)
+function jwtCheck(path, exp, silent)
+{
+    const r = newResult(silent);
+    r.Result = "JWT [" + path + "] ";
+    const b = readBody(r);
+    if (!b.ok) return r;
+    const d = decodeJwtAt(b.data, path);
+    if (d.error) return fail(r, "is not a JWT", d.error);
+    const want = resolveDeep(exp || {}), errs = [];
+    Object.keys(want).forEach((k) =>
+    {
+        const g = getByPath(d.jwt, k), w = want[k], v = g.value;
+        if (w === "KEY_EXIST") { if (!g.found) errs.push(k + " is missing"); return; }
+        if (w === "KEY_NOT_EXIST") { if (g.found) errs.push(k + " is present: " + show(v)); return; }
+        if (!g.found) { errs.push(k + " is missing"); return; }
+        if (Array.isArray(w)) { if (!(Number(v) >= w[0] && Number(v) <= w[1])) errs.push(k + " = " + show(v) + " not in [" + w[0] + ".." + w[1] + "]"); return; }
+        const s = String(w), slash = s.lastIndexOf("/");
+        if (s[0] === "/" && slash > 0) { if (!new RegExp(s.substring(1, slash), s.substring(slash + 1)).test(String(v))) errs.push(k + " = " + show(v) + " !~ " + s); return; }
+        if (s[0] === "!") { if (String(v) === s.substring(1)) errs.push(k + " = " + show(v) + " must differ"); return; }
+        if (String(v) !== s) errs.push(k + " = " + show(v) + ", expected " + show(w));
+    });
+    return errs.length ? fail(r, "claims differ", errs.join("; ")) : pass(r, "matches " + Object.keys(want).join(", "));
+}
+
+function decodeJwtAt(data, path)
+{
+    const g = getByPath(data, path);
+    if (!g.found || typeof g.value !== "string") return { error: "No JWT string at [" + path + "]" };
+    const p = g.value.split(".");
+    if (p.length !== 3) return { error: "Expected 3 dot-separated parts, got " + p.length };
+    try
+    {
+        const dec = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; return CryptoJS.enc.Base64.parse(s).toString(CryptoJS.enc.Utf8); };
+        const header = JSON.parse(dec(p[0])), claims = JSON.parse(dec(p[1]));
+        const ttl = (typeof claims.exp === "number" && typeof claims.iat === "number") ? claims.exp - claims.iat : undefined;
+        return { jwt: { header: header, claims: claims, ttl: ttl } };
+    }
+    catch (e) { return { error: "Cannot decode: " + e.message }; }
+}
+
 // test("notExecuted") - тестовые значения запроса {{TD-...}} (Test-Library ADR 0009) не исполнены: в ответе нет их
 // признаков detect (env td_detect: {ID: regexp}). Признак не совпадает с самим значением - отражение не в счёт (test_data.py check).
 function notExecuted()
@@ -610,6 +654,16 @@ function setvar(varName, path, space = "collection")
 
     const b = readBody(r);
     if (!b.ok) return r;
+    // "jwt:<путь к токену в теле>|<путь в разобранном токене>", например "jwt:accessToken|claims.sub"
+    if (p.indexOf("jwt:") === 0)
+    {
+        const [tokenPath, inner] = p.substring(4).split("|");
+        const d = decodeJwtAt(b.data, tokenPath);
+        const v = d.error ? { found: false } : getByPath(d.jwt, inner || "");
+        if (!v.found) { r.Assert = "Cannot set [" + varName + "]: " + (d.error || inner + " not found in JWT"); return r; }
+        r.Value = v.value;
+        return r;
+    }
     const g = getByPath(b.data, path);
     if (!g.found)
     {

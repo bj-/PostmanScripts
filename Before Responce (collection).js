@@ -151,6 +151,10 @@ function fwSetupBind(reqPm, reqConsole)
         uuid: function (name) { reqPm.variables.set(name, uuid4()); },
         now: function (name) { reqPm.variables.set(name, new Date().toISOString()); },
         random: function (name, length = 12, prefix = "") { reqPm.variables.set(name, prefix + randomString(length)); },
+        // jwt("bad", "{{accessToken}}", mode, fields) - испорченный JWT из валидного, без ключа подписи:
+        // "none" - alg=none и пустая подпись; "badsig" - изменена подпись; "claims" - поля fields в payload, подпись прежняя;
+        // "header" - поля fields в заголовке, подпись прежняя
+        jwt: function (name, src, mode, fields = {}) { reqPm.variables.set(name, forgeJwt(String(R(src)), mode, R(fields))); },
 
         // ---- шаги с запросами (асинхронно, по очереди)
         clearCookies: function () { enqueue("clearCookies", clearJar); },
@@ -416,6 +420,33 @@ function randomVal(type, min = null, max = null, length = 1)
 
 // internal functions
 function rnd(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+
+// ============== JWT (без ключа подписи: только порча валидного токена) ===============
+function b64uEncode(text)
+{
+    return CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(text)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function b64uDecode(part)
+{
+    let s = String(part).replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    return CryptoJS.enc.Base64.parse(s).toString(CryptoJS.enc.Utf8);
+}
+function forgeJwt(token, mode, fields)
+{
+    const p = token.split(".");
+    if (p.length !== 3) return token + ".broken";
+    const head = JSON.parse(b64uDecode(p[0])), body = JSON.parse(b64uDecode(p[1]));
+    switch (String(mode).toLowerCase())
+    {
+        case "none":   return b64uEncode(JSON.stringify(Object.assign(head, { alg: "none" }))) + "." + p[1] + ".";
+        // первый символ подписи: последний несёт неполные биты и при замене может не менять подпись
+        case "badsig": return p[0] + "." + p[1] + "." + (p[2][0] === "A" ? "B" : "A") + p[2].substring(1);
+        case "claims": return p[0] + "." + b64uEncode(JSON.stringify(Object.assign(body, fields))) + "." + p[2];
+        case "header": return b64uEncode(JSON.stringify(Object.assign(head, fields))) + "." + p[1] + "." + p[2];
+        default:       throw new Error("jwt: unknown mode [" + mode + "], use none | badsig | claims | header");
+    }
+}
 
 function getRandomDateTime(from, to)
 {

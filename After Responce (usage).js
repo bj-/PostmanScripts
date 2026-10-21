@@ -44,6 +44,10 @@ test("key", "", "{{ref_body}}", "json_eql")         // тело целиком �
 test("key", "role", ["root", "admin"], "oneof")    // также not_oneof | not_eql | between [min, max]
 test("key", "name", 3, "min_length")                // также length | max_length
 test("body", "", "EMPTY")                           // 204 без тела
+
+// ---- JWT в теле (разбор без проверки подписи: header, claims, ttl = exp - iat)
+test("jwt", "accessToken", { "header.alg": "HS256", "claims.type": "access", "claims.sid": "KEY_EXIST", ttl: [60, 86400] })
+test("jwt", "refreshToken", { "claims.sub": "{{sub1}}", "claims.jti": "!{{jti1}}", "claims.type": "/^refresh$/" })
 test("body", "", "{{sid}}", "not_contains")         // сырое тело не содержит строку (также contains | regex | not_regex)
 
 // ---- Массивы
@@ -84,6 +88,7 @@ test("todo", "FR-35.2 admin accounts", "not in contract")   // пропущен�
 
 // ---- Переменные: значение берётся из ответа. Пространство: collection (по умолчанию) | env | local
 setVar("sessionId", "id", "collection")
+setVar("sub1", "jwt:accessToken|claims.sub", "env")   // claim из JWT в теле: "jwt:<путь к токену>|<путь в токене>"
 setVar("sid", "cookie:__Host-sid", "local")
 setVar("reqId", "header:X-Request-Id", "local")
 
