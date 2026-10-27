@@ -23,6 +23,12 @@ utils = {
   randomString:         function (length = 1) { return randomString(length); },
   getAdminAccountCreds: function () { return getAdminAccountCreds(); },
   getAccounts:          function () { return getAccounts(); },
+  // jwtSign(pm,"name","{{src}}",{exp:...,nbf:...,iat:null},"secretVar",{header}) - подписать HS256 секретом из env.
+  // База header/claims - декодированный токен src (валидный, выданный входом); overrides из claims переопределяют поля
+  // payload, null/undefined - удаляют (например exp:null - токен без exp); header - заголовка. Секрет в коллекцию не
+  // попадает: берётся из переменной окружения в рантайме. Нет секрета или базового токена - запрос пропускается (как
+  // недостающие TD): иначе на стенд ушёл бы токен без валидной подписи, и негативная проверка «прошла» бы не на том.
+  jwtSign:              function (reqPm, name, src, claims, secretVar, header) { return fwJwtSign(reqPm, name, src, claims, secretVar, header); },
 };
 
 var FW_SESSION_COOKIE = "__Host-sid";
@@ -446,6 +452,48 @@ function forgeJwt(token, mode, fields)
         case "header": return b64uEncode(JSON.stringify(Object.assign(head, fields))) + "." + p[1] + "." + p[2];
         default:       throw new Error("jwt: unknown mode [" + mode + "], use none | badsig | claims | header");
     }
+}
+
+// HS256-подпись токена секретом стенда (вариант C: валидная подпись, меняется только проверяемое поле claims).
+// База - декодированный header/payload токена token (структура реального выданного токена); claims переопределяют
+// поля payload (null/undefined удаляют), header - заголовка (alg всегда HS256). Для негативных claim-проверок на
+// тестовом стенде, чей секрет подписи известен (dev). Публичный ключ/JWKS не нужен - подпись симметричная.
+function signJwt(token, claims, secret, header)
+{
+    let head = { alg: "HS256", typ: "JWT" }, body = {};
+    const p = String(token).split(".");
+    if (p.length >= 2)
+    {
+        try { head = JSON.parse(b64uDecode(p[0])); } catch (e) {}
+        try { body = JSON.parse(b64uDecode(p[1])); } catch (e) {}
+    }
+    head = Object.assign({}, head, { alg: "HS256" }, header || {});
+    const c = claims || {};
+    Object.keys(c).forEach((k) => { if (c[k] === null || c[k] === undefined) delete body[k]; else body[k] = c[k]; });
+    const input = b64uEncode(JSON.stringify(head)) + "." + b64uEncode(JSON.stringify(body));
+    const sig = CryptoJS.HmacSHA256(input, secret).toString(CryptoJS.enc.Base64)
+                .replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    return input + "." + sig;
+}
+
+// Фасад jwtSign: подписать и положить в переменную; нет секрета/базового токена - пропустить запрос (не слать битый).
+function fwJwtSign(p, name, src, claims, secretVar, header)
+{
+    secretVar = secretVar || "mobJwtSecret";
+    const secret = String(p.variables.get(secretVar) || "");
+    const base = String(p.variables.replaceIn(String(src || "")) || "");
+    if (!secret || !base)
+    {
+        const why = !secret ? ("нет секрета подписи стенда env [" + secretVar + "]") : "нет базового токена (Setup вход verify-code)";
+        console.error("JWT SIGN SKIP - " + why);
+        p.variables.set("fw_skip_reason", (p.info && p.info.requestId ? p.info.requestId : "") + "|" + why);
+        if (p.execution && typeof p.execution.skipRequest === "function") p.execution.skipRequest();
+        else throw new Error("SKIPPED: " + why);
+        return "";
+    }
+    const token = signJwt(base, claims || {}, secret, header || {});
+    p.variables.set(name, token);
+    return token;
 }
 
 function getRandomDateTime(from, to)
