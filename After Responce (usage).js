@@ -98,6 +98,11 @@ setVar("reqId", "header:X-Request-Id", "local")
 // ---- Совместимость с v3: старый обязательный блок function test(...) { utils.check / utils.test ... }
 //      в запросах продолжает работать - utils.check/test/header/schema/basictests/setvar не менялись.
 
+// Письмо после запроса (почта стенда или перехватчик Mailpit/MailHog: env mailApiBase, mailApiKind;
+// Test-Library Process/collections.md §4 «Тесты с доступом к инфраструктуре»). Нет mailApiBase - падает «нет доступа: почта»
+test("mail", { to: "{{contact}}", wait: 10000 }, { contains: ["{{expected}}"], notContains: ["49"], notRegex: ["Traceback|TemplateSyntaxError"], field: "all" })
+test("mail", { to: "{{contact}}" }, "Код подтверждения")       // строка или массив - contains
+
 // Тестовые значения по ссылке (Test-Library ADR 0009): значения {{TD-...}} запроса не исполнены -
 // в ответе нет их признаков detect (env td_detect); у значений без detect - пропуск
 test("notExecuted")

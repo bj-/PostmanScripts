@@ -252,9 +252,10 @@ function runTest(T, path, exp, type, silent, report)
         case "LOGINLATENCY":asyncLoginLatency(path, exp, report); return undefined;
         case "PARALLEL":    asyncParallel(path, exp, report); return undefined;
         case "CLOSESESSIONS": asyncCloseSessions(path, report); return undefined;
+        case "MAIL":        asyncMail(path, exp, report); return undefined;
         default:
             return { Result: "Unknown test type [" + T + "]", Silent: false, Msg: [],
-                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | JWT | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY | PARALLEL | CLOSESESSIONS" };
+                     Assert: "Use STATUS | CHECK | KEY | HEADER | SCHEMA | BASIC | COOKIE | BODY | ERROR | NOLEAK | JWT | TODO | SESSION | CALL | LOGIN | AUTHMATRIX | PATHMATRIX | ROLEMATRIX | AUDIT | RESTOREPASSWORD | ENUMTIMING | LOGINLATENCY | PARALLEL | CLOSESESSIONS | MAIL" };
     }
 }
 
@@ -796,6 +797,38 @@ function asyncLogin(creds, expStatus, report)
     send({ method: "POST", path: "/api/auth/login", body: { email: c[0], password: c[1] } }, (err, res) => {
         if (err || !res) return report(probeResult(title, false, "Request failed: " + (err && err.message)));
         report(probeResult(title, res.code == expStatus, "Got [" + res.code + "]"));
+    });
+}
+
+// test("mail", { to: "{{x}}@{{mailDomain}}", wait: 10000 }, { contains: [...], notContains: [...], regex: [...],
+//      notRegex: [...], field: "all" | "subject" | "text" | "html" }) - письмо, пришедшее на адрес to после запроса
+// (почта стенда или перехватчик: env mailApiBase, mailApiKind; opts.api - другая переменная с адресом).
+// exp строкой или массивом - contains. Нет env mailApiBase - тест падает «нет доступа: почта»
+// (Test-Library Process/collections.md §4 «Тесты с доступом к инфраструктуре»)
+function asyncMail(opts, exp, report)
+{
+    const o = resolveDeep(opts || {});
+    const to = String(o.to || "");
+    const title = "Mail to [" + to + "] ";
+    const c = fwMailConf(P(), o);
+    if (!c.base) { report(probeResult(title + "received", false, "нет доступа: почта - env [" + c.apiVar + "] is not set")); return; }
+    if (!to) { report(probeResult(title + "received", false, "opts.to is empty")); return; }
+    const since = o.since !== undefined ? fwMailTime(o.since) : Date.now() - (P().response.responseTime || 0) - 5000;
+    fwMailFetch(P(), Object.assign(c, { to: to, since: since, wait: o.wait || 10000, interval: o.interval || 1000 }), (err, m) => {
+        if (err) return report(probeResult(title + "received", false, err.message));
+        const e = (typeof exp === "string" || Array.isArray(exp)) ? { contains: [].concat(exp) } : (exp || {});
+        const field = e.field || "all";
+        const text = field === "all" ? [m.subject, m.text, m.html].join("\n") : String(m[field] || "");
+        const out = [probeResult(title + "received [" + show(m.subject, 60) + "]", true)];
+        [].concat(e.contains || []).forEach((s) => { s = String(resolve(s));
+            out.push(probeResult(title + field + " contains [" + show(s, 40) + "]", text.indexOf(s) >= 0, "Not found in mail " + field)); });
+        [].concat(e.notContains || []).forEach((s) => { s = String(resolve(s));
+            out.push(probeResult(title + field + " does not contain [" + show(s, 40) + "]", text.indexOf(s) < 0, "Found in mail " + field)); });
+        [].concat(e.regex || []).forEach((s) => {
+            out.push(probeResult(title + field + " matches /" + s + "/", new RegExp(s).test(text), "No match in mail " + field)); });
+        [].concat(e.notRegex || []).forEach((s) => {
+            out.push(probeResult(title + field + " does not match /" + s + "/", !new RegExp(s).test(text), "Match found in mail " + field)); });
+        report(out);
     });
 }
 
@@ -1644,6 +1677,64 @@ function fwLoginAttempt(method, url, rawBody)
     try { body = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody; } catch (e) { return null; }
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
     return { email: body.email, password: body.password };
+}
+
+
+// ============== Mail ===============
+// Чтение писем из почты стенда или перехватчика (Mailpit / MailHog) - копия в Before Responce (collection).js.
+// env: mailApiBase - адрес API (например http://localhost:8025), mailApiKind - mailpit (по умолчанию) | mailhog;
+// opts.api - имя другой переменной с адресом.
+function fwMailConf(p, opts)
+{
+    const apiVar = (opts && opts.api) || "mailApiBase";
+    const base = String(p.variables.get(apiVar) || "").replace(/\/+$/, "");
+    const kind = String((opts && opts.kind) || p.variables.get("mailApiKind") || "mailpit").toLowerCase();
+    return { apiVar: apiVar, base: base, kind: kind };
+}
+
+// время: число (мс) или ISO-строка
+function fwMailTime(v)
+{
+    const n = Number(v);
+    return isNaN(n) ? Date.parse(String(v)) : n;
+}
+
+// o: { base, kind, to, since (мс), wait, interval }; cb(err, { id, created, subject, text, html }) - самое новое письмо
+// на адрес to не раньше since; ждёт до wait мс, опрашивая раз в interval мс
+function fwMailFetch(p, o, cb)
+{
+    const deadline = Date.now() + o.wait;
+    const enc = encodeURIComponent;
+    const get = (url, next) => p.sendRequest({ url: url, method: "GET" }, (err, res) => {
+        let json;
+        try { json = res ? res.json() : undefined; } catch (e) { json = undefined; }
+        next(err, res, json);
+    });
+    const attempt = () => {
+        const url = o.kind === "mailhog"
+            ? o.base + "/api/v2/search?kind=to&query=" + enc(o.to) + "&limit=10"
+            : o.base + "/api/v1/search?query=" + enc("to:\"" + o.to + "\"") + "&limit=10";
+        get(url, (err, res, json) => {
+            if (err || !res) return cb(new Error("нет доступа: почта - " + ((err && err.message) || "no response from " + o.base)));
+            if (res.code !== 200) return cb(new Error("нет доступа: почта - mail search returned " + res.code));
+            const list = o.kind === "mailhog"
+                ? ((json && json.items) || []).map((m) => ({ id: m.ID, created: Date.parse(m.Created),
+                      subject: (((m.Content || {}).Headers || {}).Subject || [""])[0], text: (m.Content || {}).Body || "", html: "" }))
+                : ((json && json.messages) || []).map((m) => ({ id: m.ID, created: Date.parse(m.Created), subject: m.Subject || "" }));
+            const hit = list.filter((m) => !(m.created < o.since)).sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+            if (!hit)
+            {
+                if (Date.now() < deadline) return setTimeout(attempt, o.interval);
+                return cb(new Error("no mail to [" + o.to + "] within " + o.wait + " ms"));
+            }
+            if (o.kind === "mailhog") return cb(null, hit);
+            get(o.base + "/api/v1/message/" + enc(hit.id), (e2, r2, j2) => {
+                if (e2 || !r2 || r2.code !== 200) return cb(new Error("mail message " + hit.id + ": " + ((e2 && e2.message) || (r2 && r2.code))));
+                cb(null, { id: hit.id, created: hit.created, subject: j2.Subject || hit.subject, text: j2.Text || "", html: j2.HTML || "" });
+            });
+        });
+    };
+    attempt();
 }
 
 

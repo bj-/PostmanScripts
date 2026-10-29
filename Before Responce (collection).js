@@ -293,6 +293,35 @@ function fwSetupBind(reqPm, reqConsole)
                 });
             });
         },
+
+        // mail("otp", { to: "{{contact}}", regex: "(\\d{6})", field: "text", wait: 10000 }) - письмо на адрес to из почты
+        // стенда или перехватчика (env mailApiBase, mailApiKind: mailpit | mailhog), пришедшее после вызова mail(...);
+        // в переменную - группа regex (без regex - всё поле). Нет env mailApiBase - шаг падает «нет доступа: почта»
+        // (Test-Library Process/collections.md §4 «Тесты с доступом к инфраструктуре»)
+        mail: function (varName, opts = {}) {
+            reqPm.variables.set(varName, "");
+            const t0 = Date.now() - 5000;
+            enqueue("mail " + varName, (done) => {
+                const c = fwMailConf(reqPm, opts);
+                if (!c.base) return done(new Error("нет доступа: почта - env [" + c.apiVar + "] is not set"));
+                const to = String(R(opts.to || ""));
+                if (!to) return done(new Error("mail: opts.to is empty"));
+                const since = opts.since !== undefined ? fwMailTime(R(String(opts.since))) : t0;
+                fwMailFetch(reqPm, Object.assign(c, { to: to, since: since, wait: opts.wait || 10000, interval: opts.interval || 1000 }), (err, m) => {
+                    if (err) return done(err);
+                    const field = opts.field || "text";
+                    let val = String(m[field] || "");
+                    if (opts.regex)
+                    {
+                        const hit = new RegExp(opts.regex).exec(val);
+                        if (!hit) return done(new Error("mail to [" + to + "]: no match /" + opts.regex + "/ in " + field));
+                        val = hit.length > 1 ? hit[opts.group === undefined ? 1 : opts.group] : hit[0];
+                    }
+                    reqPm.variables.set(varName, val);
+                    done();
+                });
+            });
+        },
     };
 
     // cookie jar: очистить до шагов и после них (ответы pm.sendRequest могут его наполнить)
@@ -349,6 +378,64 @@ function fwLoginAttempt(method, url, rawBody)
     try { body = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody; } catch (e) { return null; }
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
     return { email: body.email, password: body.password };
+}
+
+
+// ============== Mail ===============
+// Чтение писем из почты стенда или перехватчика (Mailpit / MailHog) - копия в After Responce (collection).js.
+// env: mailApiBase - адрес API (например http://localhost:8025), mailApiKind - mailpit (по умолчанию) | mailhog;
+// opts.api - имя другой переменной с адресом.
+function fwMailConf(p, opts)
+{
+    const apiVar = (opts && opts.api) || "mailApiBase";
+    const base = String(p.variables.get(apiVar) || "").replace(/\/+$/, "");
+    const kind = String((opts && opts.kind) || p.variables.get("mailApiKind") || "mailpit").toLowerCase();
+    return { apiVar: apiVar, base: base, kind: kind };
+}
+
+// время: число (мс) или ISO-строка
+function fwMailTime(v)
+{
+    const n = Number(v);
+    return isNaN(n) ? Date.parse(String(v)) : n;
+}
+
+// o: { base, kind, to, since (мс), wait, interval }; cb(err, { id, created, subject, text, html }) - самое новое письмо
+// на адрес to не раньше since; ждёт до wait мс, опрашивая раз в interval мс
+function fwMailFetch(p, o, cb)
+{
+    const deadline = Date.now() + o.wait;
+    const enc = encodeURIComponent;
+    const get = (url, next) => p.sendRequest({ url: url, method: "GET" }, (err, res) => {
+        let json;
+        try { json = res ? res.json() : undefined; } catch (e) { json = undefined; }
+        next(err, res, json);
+    });
+    const attempt = () => {
+        const url = o.kind === "mailhog"
+            ? o.base + "/api/v2/search?kind=to&query=" + enc(o.to) + "&limit=10"
+            : o.base + "/api/v1/search?query=" + enc("to:\"" + o.to + "\"") + "&limit=10";
+        get(url, (err, res, json) => {
+            if (err || !res) return cb(new Error("нет доступа: почта - " + ((err && err.message) || "no response from " + o.base)));
+            if (res.code !== 200) return cb(new Error("нет доступа: почта - mail search returned " + res.code));
+            const list = o.kind === "mailhog"
+                ? ((json && json.items) || []).map((m) => ({ id: m.ID, created: Date.parse(m.Created),
+                      subject: (((m.Content || {}).Headers || {}).Subject || [""])[0], text: (m.Content || {}).Body || "", html: "" }))
+                : ((json && json.messages) || []).map((m) => ({ id: m.ID, created: Date.parse(m.Created), subject: m.Subject || "" }));
+            const hit = list.filter((m) => !(m.created < o.since)).sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+            if (!hit)
+            {
+                if (Date.now() < deadline) return setTimeout(attempt, o.interval);
+                return cb(new Error("no mail to [" + o.to + "] within " + o.wait + " ms"));
+            }
+            if (o.kind === "mailhog") return cb(null, hit);
+            get(o.base + "/api/v1/message/" + enc(hit.id), (e2, r2, j2) => {
+                if (e2 || !r2 || r2.code !== 200) return cb(new Error("mail message " + hit.id + ": " + ((e2 && e2.message) || (r2 && r2.code))));
+                cb(null, { id: hit.id, created: hit.created, subject: j2.Subject || hit.subject, text: j2.Text || "", html: j2.HTML || "" });
+            });
+        });
+    };
+    attempt();
 }
 
 

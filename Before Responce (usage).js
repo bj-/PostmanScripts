@@ -46,6 +46,9 @@ call("DELETE", "/api/auth/sessions/{{sessionId}}", { as: "sid", expect: 204 })
 call("GET", "/api/stories/{{storyId}}/publish-check", { as: "sid", expect: 200 }, { var: "check", path: "" })
 failLogins(10, "{{lock_login}}", { xff: true })   // N неудачных входов (с ротацией X-Forwarded-For)
 wait(1500)
+// письмо на адрес (почта стенда или перехватчик: env mailApiBase) - пришедшее после этого шага; в переменную - группа regex
+call("POST", "/api/auth/send-code", { body: { email: "{{contact}}" }, expect: 204 })
+mail("otp", { to: "{{contact}}", regex: "(\d{6})", field: "text", wait: 10000 })
 
 // ---- Прочее (v3)
 utils.convert("base64", "collection", "xml_tiny_signed", "xml_tiny_signed_base64")

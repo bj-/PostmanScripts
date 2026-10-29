@@ -51,6 +51,9 @@ test("session", "{{sid}}", "ALIVE");
 | `TD-<КЛАСС>-NNNN`, `TDS-...` | тестовые значения по ссылке (Test-Library ADR 0009): в запросе `{{TD-SQLI-0001}}`, значения - окружение test-data (Postman - импорт `Test-Library/Api/test-data/build/test-data.postman_environment.json`, newman - подставляет движок). Ссылка без значения - запрос не отправляется, в консоли `TEST DATA MISSING` |
 | `td_detect` | JSON `{ID: regexp}` - признаки срабатывания тестовых значений для `test("notExecuted")` (из того же окружения test-data / движка) |
 | `fw_td_used` | служебная: какие значения `{{TD-...}}` ушли в запрос (для `test("notExecuted")`) |
+| `mailApiBase` | адрес API почты стенда или перехватчика (Mailpit, MailHog), например `http://localhost:8025` - для `test("mail")` и шага `mail(...)`. Пусто - такие тесты падают «нет доступа: почта» (Test-Library `Process/collections.md` §4 «Тесты с доступом к инфраструктуре») |
+| `mailApiKind` | `mailpit` (по умолчанию) или `mailhog` - формат API почты |
+| `mailDomain` | домен тестовых адресов, письма на который попадают в почту `mailApiBase` (для адресов в тестах: `x@{{mailDomain}}`) |
 
 Домен `baseUrl` нужно добавить в allowlist cookie jar (Cookies -> Domains Allowlist): тесты очищают jar,
 чтобы запрос передавал только cookie из своего заголовка.
