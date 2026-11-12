@@ -1,0 +1,28 @@
+// Offline regression for exact contract-path exceptions; no network or Postman.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const context = vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(__dirname, "../After Responce (collection).js"), "utf8"), context);
+let body;
+context.P = () => ({response: {text: () => JSON.stringify(body)}});
+context.getContentType = () => "json";
+const allowed = {allowPaths: ["draft.translations.0.hash"]};
+body = {draft: {translations: [{hash: "public-chain-hash"}]}};
+assert.ok(context.noLeak().Assert, "legacy behavior still rejects hash");
+assert.equal(context.noLeak(allowed).Assert, null);
+body.draft.translations[0].password = "secret";
+assert.match(context.noLeak(allowed).Assert, /password/);
+delete body.draft.translations[0].password;
+body.hash = "private-other-path";
+assert.match(context.noLeak(allowed).Assert, /secret keys: hash/);
+delete body.hash;
+body.draft.translations.push({hash: "other-index"});
+assert.match(context.noLeak(allowed).Assert, /translations.1.hash/);
+body = {customCredential: "secret"};
+assert.match(context.noLeak(["customCredential"]).Assert, /customCredential/);
+assert.match(context.noLeak({extraKeys: ["customCredential"], allowPaths: []}).Assert, /customCredential/);
+body = {message: "QueryFailedError"};
+assert.match(context.noLeak(allowed).Assert, /internal details/);
+console.log("noLeak: 8 backward-compatibility/exact-path/security checks passed");

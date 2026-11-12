@@ -423,7 +423,10 @@ function error(code, field)
     return res;
 }
 
-// Тело ответа не содержит стек/внутренности и секретных ключей
+// Тело ответа не содержит стек/внутренности и секретных ключей.
+// extraKeys: прежний массив дополнительных секретных ключей либо
+// { extraKeys: [...], allowPaths: ["draft.translations.0.hash"] }.
+// allowPaths содержит только точные JSON пути публичных полей контракта, без wildcard.
 function noLeak(extraKeys)
 {
     const r = newResult(false);
@@ -437,7 +440,10 @@ function noLeak(extraKeys)
     {
         try
         {
-            const found = deepKeys(JSON.parse(text), FW_SECRET_KEYS.concat(extraKeys || []));
+            const options = extraKeys && !Array.isArray(extraKeys) && typeof extraKeys === "object" ? extraKeys : {};
+            const keys = Array.isArray(extraKeys) ? extraKeys : (options.extraKeys || []);
+            const allowed = Array.isArray(options.allowPaths) ? options.allowPaths : [];
+            const found = deepKeys(JSON.parse(text), FW_SECRET_KEYS.concat(keys)).filter((path) => allowed.indexOf(path) < 0);
             if (found.length) problems.push("secret keys: " + found.join(", "));
         }
         catch (e) { /* не JSON - ключи не ищем */ }
