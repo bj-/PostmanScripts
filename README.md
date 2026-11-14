@@ -48,7 +48,7 @@ test("session", "{{sid}}", "ALIVE");
 | `accountLockoutLimit`, `accountLockoutSec` | лимит неудачных входов стенда и время блокировки (для людей и `run.py`) |
 | `accountUnlock` | описание пути разблокировки учёток стенда (для людей и `run.py`; фреймворк не использует) |
 | `fw_failed_logins` | служебная: счётчики неудачных входов Login guard (JSON) |
-| `TD-<КЛАСС>-NNNN`, `TDS-...` | тестовые значения по ссылке (Test-Library ADR 0009): в запросе `{{TD-SQLI-0001}}`, значения - окружение test-data (Postman - импорт `Test-Library/Api/test-data/build/test-data.postman_environment.json`, newman - подставляет движок). Ссылка без значения - запрос не отправляется, в консоли `TEST DATA MISSING` |
+| `TD-<КЛАСС>-NNNN`, `TDS-...` | тестовые значения по ссылке (Test-Library ADR 0009): в запросе `{{TD-SQLI-0001}}`, значения - окружение test-data (Postman - импорт `Test-Library/Library/test-data/build/test-data.postman_environment.json`, newman - подставляет движок). Ссылка без значения - запрос не отправляется, в консоли `TEST DATA MISSING` |
 | `td_detect` | JSON `{ID: regexp}` - признаки срабатывания тестовых значений для `test("notExecuted")` (из того же окружения test-data / движка) |
 | `fw_td_used` | служебная: какие значения `{{TD-...}}` ушли в запрос (для `test("notExecuted")`) |
 | `mailApiBase` | адрес API почты стенда или перехватчика (Mailpit, MailHog), например `http://localhost:8025` - для `test("mail")` и шага `mail(...)`. Пусто - такие тесты падают «нет доступа: почта» (Test-Library `Process/collections.md` §4 «Тесты с доступом к инфраструктуре») |

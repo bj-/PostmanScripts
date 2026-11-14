@@ -1,6 +1,6 @@
 ---
 # Файлы для модели без доступа к репозиторию (пути от каталога репозиториев C:\Git).
-# Архив: python Test-Library/Api/tools/export_for_llm.py --task PostmanScripts/docs/tasks/attempt-limit.md
+# Архив: python Test-Library/Library/tools/export_for_llm.py --task PostmanScripts/docs/tasks/attempt-limit.md
 files:
   - PostmanScripts/README.md
   - PostmanScripts/Before Responce (collection).js
